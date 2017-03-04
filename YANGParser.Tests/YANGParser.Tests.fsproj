@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="Utils.fs" />
     <Compile Include="Identifiers.fs" />
+    <Compile Include="Strings.fs" />
     <EmbeddedResource Include="**\*.resx" />
   </ItemGroup>
 
