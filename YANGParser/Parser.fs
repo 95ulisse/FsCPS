@@ -7,16 +7,25 @@ open YANGParser.Ast
 [<AutoOpen>]
 module Parser =
 
-    // An identifier can start with a letter or an underscore,
-    // except X, M, or L
-    let idStart c = (isAsciiLetter c || c = '_') && c <> 'X' && c <> 'x' && c <> 'M' && c <> 'm' && c <> 'L' && c <> 'l'
-    let idContinue c = isAsciiLetter c || isDigit c || c = '_' || c = '-' || c = '.'
-    let idPreCheckStart c = isAsciiLetter c || c = '_'
+    // Whitespace and comments:
+    // comments are C-like ("//" for a line comment and "/*" + "*/" for a block comment).
+    // Note also that comments are considered as whitespace.
 
-    let id : Parser<string, unit> =
-        identifier (IdentifierOptions(isAsciiIdStart = idStart,
-                                      isAsciiIdContinue = idContinue,
-                                      preCheckStart = idPreCheckStart))
+    let singleSpaceChar = skipAnyOf " \t\n\r"
+    let lineComment = skipString "//" >>. skipRestOfLine true
+    let blockComment =
+        between (skipString "/*") (skipString "*/")
+                (skipCharsTillString "*/" false System.Int32.MaxValue)
+    
+    let singleWhitespace = lineComment <|> blockComment <|> singleSpaceChar
+
+    // `ws` parses optional whitespace, `ws1` parses at least one whitespace,
+    // and fails if none has been found. Note that more consecutive whitespaces
+    // are parsed as one.
+    let ws: Parser<unit, unit> = skipMany singleWhitespace
+    let ws1: Parser<unit, unit> = skipMany1 singleWhitespace
+
+    // ---------------------------------------------------------------------------
 
     // Helper function to strip whitespace from a multiline string literal.
     // Strips whitespace at the end of each line and also
@@ -75,12 +84,17 @@ module Parser =
     // String literal: can either be quoted or unquoted
     let stringLiteral: Parser<string, unit> =
 
-        let unquotedString = manySatisfy (isNoneOf " \t\r\n;{}")
-        let quotString = (quotedString '"' true) <|> (quotedString '\'' false)
+        // Unquoted strings end with a whitespace (comments included) or
+        // one of the following characters: ";", "{", "}"
+        let unquotedString =
+            many1CharsTill
+                anyChar
+                (followedBy (ws1 <|> (skipSatisfy (isAnyOf ";{}")) <|> eof))
         
         // Quoted strings can be concatenated using the "+" operator
+        let quotString = (quotedString '"' true) <|> (quotedString '\'' false)
         let multipleQuotedStrings =
-            sepBy1 quotString (spaces >>. pstring "+" .>> spaces)
+            sepBy1 quotString (ws >>. pstring "+" .>> ws)
             |>> String.concat ""
 
         let finalParser = multipleQuotedStrings <|> unquotedString
@@ -94,3 +108,20 @@ module Parser =
                 reply
             else
                 Reply(stripWhitespaceFromStringLiteral reply.Result (int col))
+
+    // ---------------------------------------------------------------------------
+
+    // An identifier can start with a letter or an underscore,
+    // except X, M, or L
+    let idStart c = (isAsciiLetter c || c = '_') && c <> 'X' && c <> 'x' && c <> 'M' && c <> 'm' && c <> 'L' && c <> 'l'
+    let idContinue c = isAsciiLetter c || isDigit c || c = '_' || c = '-' || c = '.'
+    let idPreCheckStart c = isAsciiLetter c || c = '_'
+
+    let id : Parser<string, unit> =
+        identifier (IdentifierOptions(isAsciiIdStart = idStart,
+                                      isAsciiIdContinue = idContinue,
+                                      preCheckStart = idPreCheckStart))
+
+    // ---------------------------------------------------------------------------
+
+    // Statements and keywords

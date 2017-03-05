@@ -77,9 +77,3 @@ module Strings =
             "padding \"first line  \n" +
             " \tsecond line\""
         AssertParses secondString str3 "first line\nsecond line"
-
-    [<Fact>]
-    let ``Unquoted strings end when a comment starts`` () =
-        AssertParses stringLiteral "test//roba" "test"
-        AssertParses stringLiteral "test/*roba*/" "test"
-        AssertParses stringLiteral "test/roba" "test/roba" // A single slash is fine
