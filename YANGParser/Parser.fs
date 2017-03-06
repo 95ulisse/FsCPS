@@ -22,8 +22,8 @@ module Parser =
     // `ws` parses optional whitespace, `ws1` parses at least one whitespace,
     // and fails if none has been found. Note that more consecutive whitespaces
     // are parsed as one.
-    let ws: Parser<unit, unit> = skipMany singleWhitespace
-    let ws1: Parser<unit, unit> = skipMany1 singleWhitespace
+    let ws: Parser<unit, unit> = skipMany singleWhitespace <?> "whitespace"
+    let ws1: Parser<unit, unit> = skipMany1 singleWhitespace <?> "whitespace"
 
     // ---------------------------------------------------------------------------
 
@@ -88,26 +88,28 @@ module Parser =
         // one of the following characters: ";", "{", "}"
         let unquotedString =
             many1CharsTill
-                anyChar
+                (satisfy (isNoneOf ";{} \t\n\r"))
                 (followedBy (ws1 <|> (skipSatisfy (isAnyOf ";{}")) <|> eof))
         
         // Quoted strings can be concatenated using the "+" operator
         let quotString = (quotedString '"' true) <|> (quotedString '\'' false)
         let multipleQuotedStrings =
-            sepBy1 quotString (ws >>. pstring "+" .>> ws)
+            sepBy1 quotString (ws >>? pstring "+" .>>? ws)
             |>> String.concat ""
 
         let finalParser = multipleQuotedStrings <|> unquotedString
 
         // Returns a special parser that saves the column of the first char
         // and uses that to strip leading whitespace in multiline strings
-        fun stream ->
+        (fun stream ->
             let col = stream.Column
             let reply = finalParser stream
             if reply.Status <> Ok then
                 reply
             else
                 Reply(stripWhitespaceFromStringLiteral reply.Result (int col))
+        )
+        <??> "string"
 
     // ---------------------------------------------------------------------------
 
@@ -121,7 +123,28 @@ module Parser =
         identifier (IdentifierOptions(isAsciiIdStart = idStart,
                                       isAsciiIdContinue = idContinue,
                                       preCheckStart = idPreCheckStart))
+        <?> "identifier"
 
     // ---------------------------------------------------------------------------
 
-    // Statements and keywords
+    // Statements
+    let statement, statementRef = createParserForwardedToRef<Statement, unit> ()
+    statementRef :=
+        opt (id .>>? pstring ":")        // Namespace
+        .>>. id                          // Name
+        .>>. opt (ws1 >>? stringLiteral) // Argument
+        .>>  ws
+        .>>. (
+            (pstring ";" |>> fun _ -> [])                           // No sub-statements
+            <|>
+            (pstring "{" >>. ws >>. many statement .>> pstring "}") // Sub-statements
+        )
+        .>> ws
+        <??> "statement"
+        |>> fun (((ns, name), arg), children) ->
+            {
+                ns = ns;
+                name = name;
+                argument = arg;
+                children = children;
+            }
