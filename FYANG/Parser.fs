@@ -1,11 +1,20 @@
-namespace YANGParser
+namespace FYANG
 
 open System.Text.RegularExpressions
 open FParsec
-open YANGParser.Ast
 
 [<AutoOpen>]
 module Parser =
+
+    // Generic statement
+    type Statement = {
+        ns: string option;
+        name: string;
+        argument: string option;
+        children: Statement list;
+    }
+
+    // ---------------------------------------------------------------------------
 
     // Whitespace and comments:
     // comments are C-like ("//" for a line comment and "/*" + "*/" for a block comment).

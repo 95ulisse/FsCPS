@@ -1,4 +1,4 @@
-namespace YANGParser.Tests
+namespace FYANG.Tests
 
 open FParsec
 open Xunit
