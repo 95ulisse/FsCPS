@@ -1,9 +1,9 @@
-namespace FYANG.Tests
+namespace FYANG.Tests.Statements
 
 open System
 open FParsec
 open Xunit
-open FYANG
+open FYANG.Statements
 open FYANG.Tests.Utils
 
 module Identifiers =
@@ -140,13 +140,13 @@ module Whitespace =
 
 
 
-module Statements =
+module FullStatements =
 
     let s ns name argument children = {
-        ns = ns;
-        name = name;
-        argument = argument;
-        children = children;
+        Namespace = ns;
+        Name = name;
+        Argument = argument;
+        Children = children;
     }
 
     [<Fact>]
