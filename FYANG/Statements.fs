@@ -1,15 +1,51 @@
 module FYANG.Statements
 
+open System
+open System.Collections.Generic
+open System.Collections.ObjectModel
 open System.Text.RegularExpressions
 open FParsec
 
-// Generic statement
-type Statement = {
-    Prefix: string option;
-    Name: string;
-    Argument: string option;
-    Children: Statement list;
+/// Position in a file in terms of line and column.
+[<StructuredFormatDisplay("{Line}:{Column}")>]
+type Position = {
+    Line: int64;
+    Column: int64;
 }
+
+/// Generic statement.
+type Statement(name: string, pos: Position) as this =
+    member val Prefix: string option = None with get, set
+    member val Name = name
+    member val Argument: string option = None with get, set
+    member val Children = StatementCollection(this)
+    member val Parent: Statement option = None with get, set
+    member val Position: Position = pos 
+
+and StatementCollection(owner: Statement) =
+    inherit Collection<Statement>()
+
+    override this.InsertItem(index: int, stmt: Statement) =
+        if stmt.Parent.IsSome then
+            raise (ArgumentException "Statement already has a parent.")
+        stmt.Parent <- Some(owner)
+        base.InsertItem(index, stmt)
+
+    override this.SetItem(index: int, stmt: Statement) =
+        if stmt.Parent.IsSome then
+            raise (ArgumentException "Statement already has a parent.")
+        this.[index].Parent <- None
+        stmt.Parent <- Some(owner)
+        base.SetItem(index, stmt)
+
+    override this.RemoveItem(index: int) =
+        this.[index].Parent <- None
+        base.RemoveItem(index)
+
+    override this.ClearItems() =
+        this |> Seq.iter (fun x -> x.Parent <- None)
+        base.ClearItems()
+
 
 // ---------------------------------------------------------------------------
 
@@ -136,7 +172,8 @@ let id : Parser<string, unit> =
 // Statements
 let statement, statementRef = createParserForwardedToRef<Statement, unit> ()
 statementRef :=
-    opt (id .>>? pstring ":")        // Prefix
+    getPosition
+    .>>. opt (id .>>? pstring ":")        // Prefix
     .>>. id                          // Name
     .>>. opt (ws1 >>? stringLiteral) // Argument
     .>>  ws
@@ -147,13 +184,38 @@ statementRef :=
     )
     .>> ws
     <??> "statement"
-    |>> fun (((prefix, name), arg), children) ->
-        {
-            Prefix = prefix;
-            Name = name;
-            Argument = arg;
-            Children = children;
-        }
+    |>> fun ((((pos, prefix), name), arg), children) ->
+            let s = Statement(
+                        name,
+                        { Line = pos.Line; Column = pos.Column },
+                        Prefix = prefix,
+                        Argument = arg
+                    )
+            children |> List.iter s.Children.Add
+            s
 
 // Entry rule
-let start = ws >>. statement
+let root = ws >>. statement
+
+// ---------------------------------------------------------------------------
+
+// Other parsers used for argument parsing
+
+let uintLength len : Parser<int, unit> =
+    manyMinMaxSatisfy len len isDigit
+    >>= (fun str ->
+        match UInt32.TryParse(str) with
+        | (true, i) -> preturn (int i)
+        | _ -> fail "Invalid number"
+    )
+
+let dateArg: Parser<_, unit> =
+    uintLength 4
+    .>>  skipChar '-'
+    .>>. uintLength 2
+    .>>  skipChar '-'
+    .>>. uintLength 2
+    <?> "date"
+    |>> (fun ((year, month), day) ->
+        DateTime(year, month, day)
+    )
