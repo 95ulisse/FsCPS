@@ -3,6 +3,8 @@ module FYANG.Statements
 open System
 open System.Collections.Generic
 open System.Collections.ObjectModel
+open System.Globalization
+open System.Text
 open System.Text.RegularExpressions
 open FParsec
 
@@ -15,12 +17,30 @@ type Position = {
 
 /// Generic statement.
 type Statement(name: string, pos: Position) as this =
-    member val Prefix: string option = None with get, set
     member val Name = name
     member val Argument: string option = None with get, set
     member val Children = StatementCollection(this)
     member val Parent: Statement option = None with get, set
-    member val Position: Position = pos 
+    member val Position: Position = pos
+
+    /// Returns the string representation of this statement.
+    override this.ToString() =
+        let s = StringBuilder()
+        
+        s.Append(this.Name) |> ignore
+
+        match this.Argument with
+        | Some(x) -> s.Append(" \"").Append(x).Append("\"") |> ignore
+        | None -> ()
+
+        if this.Children.Count = 0 then
+            s.Append(";") |> ignore
+        else
+            s.AppendLine(" {") |> ignore
+            this.Children |> Seq.iter (fun child -> s.AppendLine(child.ToString()) |> ignore)
+            s.AppendLine("}") |> ignore
+
+        s.ToString()
 
 and StatementCollection(owner: Statement) =
     inherit Collection<Statement>()
@@ -66,6 +86,7 @@ let singleWhitespace = lineComment <|> blockComment <|> singleSpaceChar
 // are parsed as one.
 let ws: Parser<unit, unit> = skipMany singleWhitespace <?> "whitespace"
 let ws1: Parser<unit, unit> = skipMany1 singleWhitespace <?> "whitespace"
+let ws_nocomments: Parser<unit, unit> = skipMany singleSpaceChar <?> "whitespace"
 
 // ---------------------------------------------------------------------------
 
@@ -155,17 +176,17 @@ let stringLiteral: Parser<string, unit> =
 
 // ---------------------------------------------------------------------------
 
-// An identifier can start with a letter or an underscore,
-// except X, M, or L
-let idStart c = (isAsciiLetter c || c = '_') && c <> 'X' && c <> 'x' && c <> 'M' && c <> 'm' && c <> 'L' && c <> 'l'
+// An identifier can start with a letter or an underscore
+let idStart c = isAsciiLetter c || c = '_'
 let idContinue c = isAsciiLetter c || isDigit c || c = '_' || c = '-' || c = '.'
-let idPreCheckStart c = isAsciiLetter c || c = '_'
 
 let id : Parser<string, unit> =
     identifier (IdentifierOptions(isAsciiIdStart = idStart,
-                                    isAsciiIdContinue = idContinue,
-                                    preCheckStart = idPreCheckStart))
+                                  isAsciiIdContinue = idContinue))
     <?> "identifier"
+
+// Keywords are just valid identifiers
+let keyword : Parser<string, unit> = id <?> "keyword"
 
 // ---------------------------------------------------------------------------
 
@@ -173,8 +194,7 @@ let id : Parser<string, unit> =
 let statement, statementRef = createParserForwardedToRef<Statement, unit> ()
 statementRef :=
     getPosition
-    .>>. opt (id .>>? pstring ":")        // Prefix
-    .>>. id                          // Name
+    .>>. keyword                     // Name
     .>>. opt (ws1 >>? stringLiteral) // Argument
     .>>  ws
     .>>. (
@@ -184,11 +204,10 @@ statementRef :=
     )
     .>> ws
     <??> "statement"
-    |>> fun ((((pos, prefix), name), arg), children) ->
+    |>> fun (((pos, name), arg), children) ->
             let s = Statement(
                         name,
                         { Line = pos.Line; Column = pos.Column },
-                        Prefix = prefix,
                         Argument = arg
                     )
             children |> List.iter s.Children.Add
@@ -199,7 +218,14 @@ let root = ws >>. statement
 
 // ---------------------------------------------------------------------------
 
-// Other parsers used for argument parsing
+// Other parsers used for argument parsing.
+// Note that this parsers enforce that the whole string must be parsed
+// (the final `eof`).
+
+type Range<'T> = {
+    Min: 'T;
+    Max: 'T;
+}
 
 let uintLength len : Parser<int, unit> =
     manyMinMaxSatisfy len len isDigit
@@ -210,12 +236,80 @@ let uintLength len : Parser<int, unit> =
     )
 
 let dateArg: Parser<_, unit> =
-    uintLength 4
+    ws_nocomments
+     >>. uintLength 4
     .>>  skipChar '-'
     .>>. uintLength 2
     .>>  skipChar '-'
     .>>. uintLength 2
+    .>>  ws_nocomments
+    .>>  eof
     <?> "date"
     |>> (fun ((year, month), day) ->
         DateTime(year, month, day)
     )
+
+let ref: Parser<_, unit> =
+    ws_nocomments
+     >>. opt (id .>>? pstring ":")
+    .>>. id
+    .>>  ws_nocomments
+    .>>  eof
+
+let range pnumber min max =
+    let rangeBoundary =
+        choice [
+            skipString "min" |>> (fun _ -> min);
+            skipString "max" |>> (fun _ -> max);
+            pnumber;
+        ]
+    let rangePart =
+        rangeBoundary
+        .>>. opt (ws_nocomments >>? skipString ".." >>? ws_nocomments >>? rangeBoundary)
+        |>> (fun (min, max) ->
+            match max with
+            | Some(actualMax) -> { Min = min; Max = actualMax }
+            | None -> { Min = min; Max = min }
+        )
+    ws_nocomments
+     >>. sepBy1 rangePart (ws_nocomments >>. skipChar '|' >>. ws_nocomments)
+    .>>  ws_nocomments
+    .>>  eof
+
+let lengthRangeDescription =
+    range puint32 0u UInt32.MaxValue
+
+let rangeDescription =
+    let numberFormat =
+            NumberLiteralOptions.AllowMinusSign
+        ||| NumberLiteralOptions.AllowPlusSign
+        ||| NumberLiteralOptions.AllowFraction
+    
+    // The number parser is taken from the FParsec source, and simplified a bit.
+    // The problem is that the `numberLiteral` parser allows number such as "1."
+    // to be parsed successfully. We must remove the trailing dot, otherwise it
+    // will cause problems with the range separator "..".
+    let pnumber =
+        fun stream ->
+            let reply = numberLiteral numberFormat "number" stream
+            if reply.Status = Ok then
+                let nl = reply.Result
+                try
+                    let n = Double.Parse(nl.String, CultureInfo.InvariantCulture)
+
+                    // The number is a valid double, so check if we need to backtrack the stream
+                    // of just one char to compensate for the trailing dot.
+                    if nl.String.EndsWith(".") then
+                        stream.Skip(-1)
+
+                    Reply(n)
+                with e ->
+                    let error = if   (e :? System.OverflowException) then messageError "Number outside of the Double range."
+                                elif (e :? System.FormatException) then messageError "The floating-point number has an invalid format (this error is unexpected, please report this error message to fparsec@quanttec.com)."
+                                else reraise()
+                    stream.Skip(-nl.String.Length)
+                    Reply(FatalError, error)
+            else
+                Reply(reply.Status, reply.Error)
+
+    range pnumber Double.MinValue Double.MaxValue

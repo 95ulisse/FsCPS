@@ -1,6 +1,7 @@
 module FYANG.Parser
 
 open System
+open System.Collections
 open System.Collections.Generic
 open System.Text.RegularExpressions
 open Microsoft.FSharp.Quotations
@@ -8,51 +9,108 @@ open Microsoft.FSharp.Quotations.Patterns
 open FYANG.Statements
 open FYANG.Model
 
-type NamespaceScope = {
-    CurrentNamespace: YANGNamespace;
-    Prefixes: Dictionary<string, YANGNamespace>
+/// Result of a parser.
+/// It can either be an error or a success, in which case the parsed element is returned.
+type SchemaParserResult<'T> = Result<'T, SchemaError list>
+
+
+/// Scope of a single statement.
+/// A scope lives only between the children of a statement,
+/// or in other words, a scope begins with a "{" and ends with a "}".
+type Scope = {
+    Module: YANGModule;
+    ParentStatement: Statement;
+    ParentNode: YANGNode;
+    Prefixes: Dictionary<string, YANGModule>;
+    Types: Dictionary<YANGName, YANGType>;
 }
+
 
 /// Context of the parsing operation.
 /// Contains a pointer to the current statement and other useful informations.
-/// It also implements a stack-like semantics to aid recursion.
+/// It also implements a stack-like semantics for scopes to aid recursion.
 type SchemaParserContext(rootStatement: Statement) =
 
-    let _parentStack = Stack<YANGNode>()
-    let _namespaceStack = Stack<NamespaceScope>()
+    let _scopeStack = Stack<Scope>()
 
+    /// Root statement from which the parsing started.
     member val RootStatement: Statement = rootStatement
+
+    /// Current statement that is being parsed.
     member val Statement = rootStatement with get, set
 
-    member this.NamespaceScope = _namespaceStack.Peek()
+    /// Current scope.
+    member this.Scope
+        with get() = _scopeStack.Peek()
 
-    member this.PushParent n =
-        _parentStack.Push(n)
+    /// Pushes a new scope with the given parent statements and node to the stack.
+    member this.PushScope(parentStatement, parentNode: YANGNode) =
+        if parentNode :? YANGModule then
+            _scopeStack.Push({
+                Module = parentNode :?> YANGModule;
+                ParentStatement = parentStatement;
+                ParentNode = parentNode;
+                Prefixes = Dictionary<_, _>();
+                Types = Dictionary<_, _>();
+            })
+        else
+            _scopeStack.Push({
+                this.Scope with
+                    ParentStatement = parentStatement;
+                    ParentNode = parentNode;
+                    Prefixes = Dictionary<_, _>();
+                    Types = Dictionary<_, _>();
+            })
 
-    member this.PopParent() =
-        _parentStack.Pop()
+    /// Pops the last scope from the stack.
+    member __.PopScope() =
+        _scopeStack.Pop()
 
-    member this.GetParentNode<'T when 'T :> YANGNode>() =
-        _parentStack.Peek() :?> 'T
+    /// Returns the type with the given name.
+    member this.GetType(name: YANGName) =
+        _scopeStack
+        |> Seq.tryPick (fun scope ->
+            match scope.Types.TryGetValue(name) with
+            | (true, t) -> Some(t)
+            | _ -> None
+        )
 
-    member this.PushNamespaceScope ns =
-        let scope = {
-            CurrentNamespace = ns;
-            Prefixes = Dictionary<_, _>();
-        }
-        _namespaceStack.Push scope
+    /// Registers a new type in the current scope.
+    /// Returns an error if the new type would shadow an already defined one.
+    member this.RegisterType(t: YANGType) =
+        match YANGPrimitiveTypes.FromName(t.Name.Name) with
+        | Some(shadowedType) -> Error([ ShadowedType(t.OriginalStatement.Value, shadowedType) ])
+        | None ->
+            match this.GetType(t.Name) with
+            | Some(shadowedType) ->
+                Error([ ShadowedType(t.OriginalStatement.Value, shadowedType) ])
+            | None ->
+                this.Scope.Types.Add(t.Name, t)
+                Ok()
 
-    member this.PopNamespaceScope() =
-        _namespaceStack.Pop()
-
-    member this.GetNamespace prefix =
-        match _namespaceStack.Peek().Prefixes.TryGetValue prefix with
-        | (true, ns) -> Some ns
-        | _ -> None
+    /// Resolves a reference to a type.
+    member this.ResolveTypeRef(prefix: string option, name: string) =
+        // Check if it's a reference to a primitive type
+        match prefix, YANGPrimitiveTypes.FromName(name) with
+        | None, Some(primitiveType) -> Some(primitiveType)
+        | None, None ->
+            // We have an unprefixed reference, so resolve the reference from the current scope
+            this.GetType({ Namespace = this.Scope.Module.Namespace; Name = name })
+        | Some(p), _ ->
+            // We have a prefixed reference, so resolve the module associated to the prefix,
+            // then search between it's exported types
+            match this.Scope.Prefixes.TryGetValue(p) with
+            | (true, m) ->
+                let fullName = { Namespace = m.Namespace; Name = name }
+                match m.ExportedTypes.TryGetValue(fullName) with
+                | (true, t) -> Some(t)
+                | _ -> None
+            | _ -> None
 
 
 /// A parser is a function from a parsing context to a result or an error list.
-type SchemaParser<'T> = SchemaParserContext -> Result<'T, SchemaError list>
+type SchemaParser<'T> = SchemaParserContext -> SchemaParserResult<'T>
+
 
 /// Discriminated union indicating how many times a statement can be repeated.
 type Cardinality =
@@ -61,13 +119,20 @@ type Cardinality =
     | Many
     | Many1
 
+
+/// Specification of a single YANG statements.
 type StatementSpec<'T> = {
     Name: string;
     Cardinality: Cardinality;
     Parser: SchemaParser<'T>;
 }
 
-type StatementSpecHandler<'TNode, 'TArg> = 'TNode -> 'TArg -> SchemaParserContext -> Result<unit, SchemaError list>
+
+/// Callback used by the various parsers to handle the parsing of a statement.
+/// It is usually called after a statement has been parsed, and this function
+/// takes care of deciding what to do with the new value.
+type SchemaParserCallback<'TNode, 'TArg> = 'TNode -> 'TArg -> SchemaParserContext -> SchemaParserResult<unit>
+
 
 /// Helper function to extract a value from a map or return a default if the key is not present
 let getOrDefault key def map =
@@ -102,7 +167,7 @@ let checkCardinality stmt desc count =
 
 /// Builds a `StatementSpec` for a statement that will be mapped
 /// to a property of a YANG node.
-let property name (argParser: SchemaParser<'b>) cardinality (handler: StatementSpecHandler<'a, 'b>) : StatementSpec<'a> =
+let property name (argParser: SchemaParser<'b>) cardinality (handler: SchemaParserCallback<'a, 'b>) : StatementSpec<'a> =
 
     // Properties can be specified only once at most.
     // Note that this is not a parse-time check, that is why we throw exceptions.
@@ -121,8 +186,8 @@ let property name (argParser: SchemaParser<'b>) cardinality (handler: StatementS
                 match argParser ctx with
                 | Ok(arg) ->
                     // Executes the handler
-                    match handler (ctx.GetParentNode()) arg ctx with
-                    | Ok(_) -> Ok(ctx.GetParentNode())
+                    match handler (ctx.Scope.ParentNode :?> 'a) arg ctx with
+                    | Ok(_) -> Ok(ctx.Scope.ParentNode :?> 'a)
                     | Error(l) -> Error(l)
                 | Error(l) -> Error(l)
 
@@ -133,31 +198,31 @@ let property name (argParser: SchemaParser<'b>) cardinality (handler: StatementS
     }
 
 /// Builds a `StatementSpec` for a statement that will construct other YANG nodes.
-let child name (childSpec: StatementSpec<'b>) cardinality (handler: StatementSpecHandler<'a, 'b>) : StatementSpec<'a> =
+let child (childSpec: StatementSpec<'b>) cardinality (handler: SchemaParserCallback<'a, 'b>) : StatementSpec<'a> =
     let parser : SchemaParser<_> =
         fun ctx ->
             // Check that the current statement has the expected name
-            if ctx.Statement.Name <> name then
-                Error([ ExpectedStatement(ctx.Statement, name) ])
+            if ctx.Statement.Name <> childSpec.Name then
+                Error([ ExpectedStatement(ctx.Statement, childSpec.Name) ])
             else
                 // Parses the child
                 match childSpec.Parser ctx with
                 | Error(l) -> Error(l)
                 | Ok(child) ->
-                    let parent = ctx.GetParentNode()
+                    let parent = ctx.Scope.ParentNode :?> 'a
                     match handler parent child ctx with
                     | Ok(_) -> Ok(parent)
                     | Error(l) -> Error(l)
 
     {
-        Name = name;
+        Name = childSpec.Name;
         Cardinality = cardinality;
         Parser = parser;
     }
 
 /// Creates a spec for a generic YANG node, providing a name, a constructor function
 /// and a description of the allowed children.
-let createSpec name (ctor: Statement * 'b -> 'a) argumentParser childrenParser : StatementSpec<'a> =
+let createSpec<'a, 'b when 'a :> YANGNode> name (ctor: 'b -> 'a) argumentParser childrenParser : StatementSpec<'a> =
     let parser: SchemaParser<_> =
         fun ctx ->
             // Check that the current statement has the expected name
@@ -170,21 +235,24 @@ let createSpec name (ctor: Statement * 'b -> 'a) argumentParser childrenParser :
                     | None -> Error([ ArgumentExpected(ctx.Statement) ])
                     | Some(arg) ->
                         match argumentParser ctx with
-                        | Ok(arg) -> Ok(ctor(ctx.Statement, arg))
+                        | Ok(arg) -> Ok(ctor(arg))
                         | Error(l) -> Error(l)
 
                 // Checks the result of the construction
                 match constructedNode with
                 | Ok(node) ->
 
-                    let currentStatement = ctx.Statement
-                    ctx.PushParent(node)
+                    // Save the original statement in the node
+                    node.OriginalStatement <- Some(ctx.Statement)
 
+                    // We are entering a new block, so we push a new scope to the context
+                    ctx.PushScope(ctx.Statement, node)
+
+                    // Parses the children
                     let result = childrenParser ctx
                     
                     // Restores the parsing context and returns
-                    ctx.PopParent() |> ignore
-                    ctx.Statement <- currentStatement
+                    ctx.PopScope() |> ignore
                     result
 
                 | Error(l) -> Error(l)
@@ -211,7 +279,7 @@ let anyOf (childrenDesc: StatementSpec<'a> list) : SchemaParser<'a> =
         |> Map.ofList
     fun ctx ->
         let parentStatement = ctx.Statement
-        let parentNode = ctx.GetParentNode<'a>()
+        let parentNode = ctx.Scope.ParentNode :?> 'a
 
         // Cycles all the child statements and parses them.
         // We also keep track of how many times we encounter each child
@@ -326,7 +394,7 @@ let unorderedGroups (childrenSpec: StatementSpec<'a> list list) : SchemaParser<'
     // The parser
     fun ctx ->
         let parentStatement = ctx.Statement
-        let parentNode = ctx.GetParentNode<'a>()
+        let parentNode = ctx.Scope.ParentNode :?> 'a
         let mutable index = 0
 
         // The outer `for` loops over the groups,
@@ -342,8 +410,11 @@ let unorderedGroups (childrenSpec: StatementSpec<'a> list list) : SchemaParser<'
                 | _ -> result <- Error(errors)
 
         // If there's a child remaining, it means that it couldn't be parsed
-        if index < parentStatement.Children.Count then
-            result <- Error([ UnexpectedStatement(parentStatement.Children.[index]) ])
+        match result with
+        | Error(_) -> ()
+        | Ok(_) ->
+            if index < parentStatement.Children.Count then
+                result <- Error([ UnexpectedStatement(parentStatement.Children.[index]) ])
 
         result
 
@@ -360,7 +431,7 @@ let unorderedGroups (childrenSpec: StatementSpec<'a> list list) : SchemaParser<'
 ///
 /// The call to `prop cardinality <@ fun x -> x.MyProp @>` is equivalent to
 /// `property "my-prop" cardinality (fun x val -> x.MyProp <- val.Value; Ok())`.
-let prop argParser cardinality (expr: Expr<'a -> string>) : StatementSpec<'a> =
+let prop (argParser: SchemaParser<'b>) cardinality (expr: Expr<'a -> 'b>) : StatementSpec<'a> =
     
     // First of all, we need to find the property accessed in the quotation
     let propInfo =
@@ -369,7 +440,7 @@ let prop argParser cardinality (expr: Expr<'a -> string>) : StatementSpec<'a> =
         | _ -> invalidArg "expr" "Invalid property expression"
 
     // Then we normalize the name
-    let statementName = Regex.Replace(propInfo.Name, "[A-Z]", "-$1").ToLower().Substring(1)
+    let statementName = Regex.Replace(propInfo.Name, "[A-Z]", "-$&").ToLower().Substring(1)
 
     property statementName argParser cardinality (fun node value _ ->
         propInfo.SetMethod.Invoke(node, [| box value |]) |> ignore
@@ -384,7 +455,7 @@ let prop argParser cardinality (expr: Expr<'a -> string>) : StatementSpec<'a> =
 ///
 /// The call to `chld parser cardinality <@ fun x -> x.MyProp @>` is equivalent to
 /// `child "my-prop" parser cardinality (fun x val -> x.MyProp.Add(val); Ok())`.
-let chld (childSpec: StatementSpec<'b>) cardinality (expr: Expr<'a -> #ICollection<'b>>) : StatementSpec<'a> =
+let chld (childSpec: StatementSpec<_>) cardinality (expr: Expr<'a -> #IList>) : StatementSpec<'a> =
     
     // First of all, we need to find the property accessed in the quotation
     let propInfo =
@@ -392,24 +463,21 @@ let chld (childSpec: StatementSpec<'b>) cardinality (expr: Expr<'a -> #ICollecti
         | Lambda(_, PropertyGet(Some(_), p, _)) -> p
         | _ -> invalidArg "expr" "Invalid property expression"
 
-    // Then we normalize the name
-    let statementName = Regex.Replace(propInfo.Name, "[A-Z]", "-$1").ToLower().Substring(1)
-
-    child statementName childSpec cardinality (fun node value _ ->
-        let coll = propInfo.GetMethod.Invoke(node, null) :?> ICollection<'b>
-        coll.Add(value)
+    child childSpec cardinality (fun node value _ ->
+        let coll = propInfo.GetMethod.Invoke(node, null) :?> IList
+        coll.Add(value) |> ignore
         Ok()
     )
 
 /// Argument parser that accepts any string.
-let any =
-    fun (ctx: SchemaParserContext) ->
+let any : SchemaParser<string> =
+    fun ctx ->
         Ok(ctx.Statement.Argument.Value)
 
 /// Helper function that transforms an FParsec parser in an argument parser suitable
 /// for a `StatementSpec` construction.
-let arg (parser: FParsec.Primitives.Parser<_, unit>) =
-    fun (ctx: SchemaParserContext) ->
+let arg (parser: FParsec.Primitives.Parser<_, unit>) : SchemaParser<_> =
+    fun ctx ->
         match FParsec.CharParsers.run parser ctx.Statement.Argument.Value with
         | FParsec.CharParsers.Success(parsedArg, _, _) -> Ok(parsedArg)
         | FParsec.CharParsers.Failure(e, _, _) -> Error([ ArgumentParserError(ctx.Statement, e) ])
@@ -419,23 +487,50 @@ let unqualifiedIdentifier = arg Statements.id
 
 /// Argument parser for a qualified identifier.
 /// Parses an identifier and as namespace uses the current namespace of the parsing context.
-let identifier =
-    fun (ctx: SchemaParserContext) ->
+let identifier : SchemaParser<YANGName> =
+    fun ctx ->
         match unqualifiedIdentifier ctx with
         | Ok(unqualifiedName) ->
             let fullName = {
-                Namespace = ctx.NamespaceScope.CurrentNamespace;
+                Namespace = ctx.Scope.Module.Namespace;
                 Name = unqualifiedName
             }
             Ok(fullName)
         | Error(l) -> Error(l)
 
+/// Argument parser for a reference to a type.
+let typeRef : SchemaParser<YANGType> =
+    fun ctx ->
+        match arg Statements.ref ctx with
+        | Error(l) -> Error(l)
+        | Ok((prefix, name)) -> 
+            match ctx.ResolveTypeRef(prefix, name) with
+            | Some(t) -> Ok(t)
+            | None -> Error([ UnresolvedTypeRef(ctx.Statement, ctx.Statement.Argument.Value) ])
+
 /// Argument parser a Uri.
-let uri =
-    fun (ctx: SchemaParserContext) ->
+let uri : SchemaParser<Uri> =
+    fun ctx ->
         match Uri.TryCreate(ctx.Statement.Argument.Value, UriKind.Absolute) with
         | (true, uri) -> Ok(uri)
         | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid Uri.") ])
+
+/// Argument parser for a Regex.
+let regex : SchemaParser<Regex> =
+    fun ctx ->
+        try
+            Ok(Regex(ctx.Statement.Argument.Value, RegexOptions.Compiled))
+        with
+        | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid Regex.") ])
+
+/// Argument parser for a status statement.
+let status : SchemaParser<YANGStatus> =
+    fun ctx ->
+        match ctx.Statement.Argument.Value with
+        | "current" -> Ok(YANGStatus.Current)
+        | "deprecated" -> Ok(YANGStatus.Deprecated)
+        | "obsolete" -> Ok(YANGStatus.Obsolete)
+        | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid status. The passible values are `current`, `deprecated` or `obsolete`.") ])
 
 /// Helper operator to execute an action after a parser only if it succeeds.
 let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
@@ -452,6 +547,86 @@ let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
 // ------------------------------------------------------------------
 // Actual parsers
 // ------------------------------------------------------------------
+
+/// Shorthand function to create a spec for a statement representing a type restriction.
+/// Automatically configures the optional substatements `description`, `error-app-tag`,
+/// `error-message` and `reference`.
+let createRestrictionSpec name (ctor: 'a -> #YANGTypeRestriction) (argParser: SchemaParser<'a>) =
+    createSpec name ctor argParser (anyOf [
+        prop any Optional <@ fun x -> x.Description @>;
+        prop any Optional <@ fun x -> x.ErrorAppTag @>;
+        prop any Optional <@ fun x -> x.ErrorMessage @>;
+        prop any Optional <@ fun x -> x.Reference @>;
+    ])
+
+type YANGTypeRef(t: YANGType) =
+    inherit YANGNode()
+    member __.Value = t
+    member __.AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
+
+let prangeRestriction : StatementSpec<YANGRangeRestriction> =
+    createRestrictionSpec
+        "range"
+        YANGRangeRestriction
+        (arg Statements.rangeDescription)
+
+let plengthRestriction : StatementSpec<YANGLengthRestriction> =
+    createRestrictionSpec
+        "length"
+        YANGLengthRestriction
+        (arg Statements.lengthRangeDescription)
+
+let ppatternRestriction : StatementSpec<YANGPatternRestriction> =
+    createRestrictionSpec
+        "pattern"
+        YANGPatternRestriction
+        regex
+
+let ptype : StatementSpec<YANGTypeRef> =
+    createSpec
+        "type"
+        YANGTypeRef
+        typeRef
+        (anyOf [
+            chld prangeRestriction   Optional <@ fun x -> x.AdditionalRestrictions @>;
+            chld plengthRestriction  Optional <@ fun x -> x.AdditionalRestrictions @>;
+            chld ppatternRestriction Many     <@ fun x -> x.AdditionalRestrictions @>;
+        ])
+
+let ptypedef : StatementSpec<YANGType> =
+    createSpec
+        "typedef"
+        YANGType
+        identifier
+        (anyOf [
+            child ptype Required (fun node value _ ->
+                node.BaseType <- Some value.Value
+                node.Restrictions.AddRange(value.AdditionalRestrictions)
+                Ok()
+            );
+
+            property "default" any    Optional (fun x value _ -> x.Default <- value; Ok());
+            prop               any    Optional <@ fun x -> x.Description @>;
+            prop               any    Optional <@ fun x -> x.Reference @>;
+            prop               status Optional <@ fun x -> x.Status @>;
+            prop               any    Optional <@ fun x -> x.Units @>;
+        ])
+
+    // If a default value has been provided, check that it's valid
+    >=> (fun t ctx ->
+        if not (isNull t.Default) then
+            match t.IsValid(t.Default) with
+            | Ok _ -> Ok(t)
+            | Error(restriction) -> Error([ InvalidDefault(t, restriction) ])
+        else
+            Ok(t)
+    )
+
+    // Registers the new type in the context automatically
+    >=> (fun t ctx ->
+        ctx.RegisterType(t)
+        |> Result.map (fun _ -> t)
+    )
 
 let pcontainer : StatementSpec<YANGContainer> =
     createSpec
@@ -486,7 +661,10 @@ let pmodulerevision : StatementSpec<YANGModuleRevision> =
         "revision"
         YANGModuleRevision
         (arg Statements.dateArg)
-        (anyOf [])
+        (anyOf [
+            prop any Optional <@ fun x -> x.Description @>;
+            prop any Optional <@ fun x -> x.Reference @>;
+        ])
 
 let pmodule : StatementSpec<YANGModule> =
     createSpec
@@ -505,18 +683,11 @@ let pmodule : StatementSpec<YANGModule> =
                 );
                 property "namespace" uri Required (fun node value ctx ->
                     node.Namespace <- { Module = node; Uri = value }
-                    // Push a new namespace scope if the prefix has also already been parsed
-                    if not (isNull node.Prefix) then
-                        ctx.PushNamespaceScope(node.Namespace)
-                        ctx.NamespaceScope.Prefixes.Add(node.Prefix, node.Namespace)
                     Ok()
                 );
                 property "prefix" unqualifiedIdentifier Required (fun node value ctx ->
                     node.Prefix <- value
-                    // Push a new namespace scope if the namespace has also already been parsed
-                    if node.Namespace <> YANGNamespace.Empty then
-                        ctx.PushNamespaceScope(node.Namespace)
-                        ctx.NamespaceScope.Prefixes.Add(node.Prefix, node.Namespace)
+                    ctx.Scope.Prefixes.Add(node.Prefix, node)
                     Ok()
                 )
             ];
@@ -538,16 +709,32 @@ let pmodule : StatementSpec<YANGModule> =
 
             // Body statements
             [
-                chld pcontainer Many <@ fun x -> x.Containers @>;
-                chld pleaf      Many <@ fun x -> x.Leafs @>;
-                chld pleaflist  Many <@ fun x -> x.LeafLists @>;
-                chld plist      Many <@ fun x -> x.Lists @>;
+                // Typedefs
+                child ptypedef Many (fun x t _ -> x.ExportedTypes.Add(t.Name, t); Ok());
+
+                // Data statements
+                chld pcontainer Many <@ fun x -> x.DataNodes @>;
+                chld pleaf      Many <@ fun x -> x.DataNodes @>;
+                chld pleaflist  Many <@ fun x -> x.DataNodes @>;
+                chld plist      Many <@ fun x -> x.DataNodes @>;
             ]
         ])
 
-    // When the module has been completely parsed,
-    // pop the namespace scope from the stack
-    >=> (fun m ctx ->
-        ctx.PopNamespaceScope() |> ignore
-        Ok(m)
-    )
+
+
+// ------------------------------------------------------------------
+// Public interface
+// ------------------------------------------------------------------
+
+type YANGParser() =
+
+    member __.ParseModule str =
+
+        // Parses the string as a tree of statements
+        match FParsec.CharParsers.run Statements.root str with
+        | FParsec.CharParsers.Failure(e, _, _) -> Error([ ParserError(e) ])
+        | FParsec.CharParsers.Success(statement, _, _) ->
+
+            // Transforms the statements to the actual schema tree
+            let ctx = SchemaParserContext(statement)
+            pmodule.Parser ctx

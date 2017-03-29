@@ -1,4 +1,4 @@
-namespace FYANG.Tests.Statements
+namespace FYANG.Tests
 
 open System
 open FParsec
@@ -142,65 +142,79 @@ module Whitespace =
 
 module FullStatements =
 
-    let s ns name argument children = {
-        Namespace = ns;
-        Name = name;
-        Argument = argument;
-        Children = children;
-    }
+    let s name argument children =
+        let stmt =
+            Statement(
+                name,
+                { Line = 0L; Column = 0L },
+                Argument = argument
+            )
+        children |> List.iter (fun c -> stmt.Children.Add(c))
+        stmt
 
     [<Fact>]
     let ``Namespaces are optional`` () =
-        AssertParses statement "name arg;" (s None "name" (Some "arg") [])
-        AssertParses statement "ns:name arg;" (s (Some "ns") "name" (Some "arg") [])
+        AssertParsesStmt statement "name arg;" (s "name" (Some "arg") [])
 
     [<Fact>]
     let ``Arguments are optional`` () =
-        AssertParses statement "name;" (s None "name" None [])
+        AssertParsesStmt statement "name;" (s "name" None [])
 
     [<Fact>]
     let ``Zero children statement`` () =
-        AssertParses statement
+        AssertParsesStmt statement
             "name {  };"
-            (s None "name" None [])
+            (s "name" None [])
 
     [<Fact>]
     let ``One child statement`` () =
-        AssertParses statement
+        AssertParsesStmt statement
             "name { name2; };"
-            (s None "name" None [ (s None "name2" None []) ])
+            (s "name" None [ (s "name2" None []) ])
 
     [<Fact>]
     let ``Two children statements`` () =
-        AssertParses statement
+        AssertParsesStmt statement
             "name { name2; name3; };"
-            (s None "name" None [ (s None "name2" None []); (s None "name3" None []) ])
+            (s "name" None [ (s "name2" None []); (s "name3" None []) ])
 
     [<Fact>]
     let ``Nested children statements`` () =
-        AssertParses statement
+        AssertParsesStmt statement
             "name { name2; name3 { nameX; } name4 { nameY; } };"
-            (s None "name" None [
-                (s None "name2" None []);
-                (s None "name3" None [
-                    (s None "nameX" None [])
+            (s "name" None [
+                (s "name2" None []);
+                (s "name3" None [
+                    (s "nameX" None [])
                 ]);
-                (s None "name4" None [
-                    (s None "nameY" None [])
+                (s "name4" None [
+                    (s "nameY" None [])
                 ])
             ])
 
     [<Fact>]
     let ``Less whitespace possible`` () =
-        AssertParses statement
+        AssertParsesStmt statement
             "parent{child1;child2;}"
-            (s None "parent" None [
-                (s None "child1" None []);
-                (s None "child2" None [])
+            (s "parent" None [
+                (s "child1" None []);
+                (s "child2" None [])
             ])
 
     [<Fact>]
     let ``Whitespace everywhere`` () =
-        AssertParses statement
+        AssertParsesStmt statement
             "name 'arg arg' \n{ name2 \n arg2 \n ; \n }\n"
-            (s None "name" (Some "arg arg") [ (s None "name2" (Some "arg2") []) ])
+            (s "name" (Some "arg arg") [ (s "name2" (Some "arg2") []) ])
+
+    [<Fact>]
+    let ``Keyword names can start with X, M or L`` () =
+        AssertParsesStmt statement
+            "module {}"
+            (s "module" None [])
+        AssertParsesStmt statement
+            "lestatement {}"
+            (s "lestatement" None [])
+        AssertParsesStmt statement
+            "xstatement {}"
+            (s "xstatement" None [])
