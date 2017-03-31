@@ -63,6 +63,7 @@ type SchemaError =
     | ShadowedType of Statement * YANGType
     | InvalidDefault of YANGType * YANGTypeRestriction
     | UnresolvedTypeRef of Statement * string
+    | InvalidTypeRestriction of Statement * YANGType
 
     with
 
@@ -111,11 +112,13 @@ type SchemaError =
                 | InvalidDefault(x, y) ->
                     let restriction =
                         match y.OriginalStatement with
-                        | Some(s) -> s.ToString()
+                        | Some(s) -> s.Position.ToString()
                         | None -> "<position not available>"
                     x.OriginalStatement, (sprintf "This type has an invalid default value. See restriction at %s." restriction)
                 | UnresolvedTypeRef(x, y) ->
                     Some x, (sprintf "Cannot find type %s." y)
+                | InvalidTypeRestriction(x, y) ->
+                    Some(x), (sprintf "This restriction cannot be applied to the type %A." y.Name)
             
             match stmt with
             | Some(s) -> sprintf "Statement \"%s\" (%A): %s" s.Name s.Position msg
@@ -124,7 +127,7 @@ type SchemaError =
 
 /// Namespace used in a YANG model.
 /// Namespaces are strictly tied to the module that defined them.
-and [<StructuredFormatDisplay("{{{Uri}}}")>] YANGNamespace =
+and [<StructuredFormatDisplay("{Uri}")>] YANGNamespace =
     {
         Module: YANGModule;
         Uri: Uri;
@@ -227,8 +230,9 @@ and YANGType(name: YANGName) =
     let mutable _reference: string option = None
     let mutable _status: YANGStatus option = None
     let mutable _units: string option = None
+    let _properties = Dictionary<string, obj>()
 
-    member __.Name = name
+    member val Name = name
     
     member val BaseType: YANGType option = None with get, set
     
@@ -279,6 +283,21 @@ and YANGType(name: YANGName) =
 
     member val Restrictions = ResizeArray<YANGTypeRestriction>()
 
+    member this.SetProperty(name, value: #obj) =
+        _properties.Add(name, value)
+
+    member this.GetProperty<'T>(name) =
+        match _properties.TryGetValue(name), this.BaseType with
+        | (true, value), _ -> Some(value :?> 'T)
+        | _, Some(b) -> b.GetProperty(name)
+        | _, None -> None
+
+    abstract member CanBeRestrictedWith: YANGTypeRestriction -> bool
+    default this.CanBeRestrictedWith(r: YANGTypeRestriction) =
+        match this.BaseType with
+        | Some(b) -> b.CanBeRestrictedWith(r)
+        | None -> invalidOp (sprintf "Missing restriction filter logic for type %A" this.Name)
+
     member this.IsValid o =
         let violatedRestriction =
             this.Restrictions
@@ -288,84 +307,32 @@ and YANGType(name: YANGName) =
         | None, Some b -> b.IsValid o
         | None, None -> Ok()
     
-    abstract member Parse: string -> obj option
-    default this.Parse (str: string) : obj option =
+    member this.Parse str =
+        this.ParseCore(this, str)
+
+    member this.Serialize o =
+        this.SerializeCore(this, o)
+
+    member this.CheckRequiredProperties() =
+        this.CheckRequiredPropertiesCore(this)
+
+    abstract member ParseCore: YANGType * string -> obj option
+    default this.ParseCore(actualType: YANGType, str: string) =
         match this.BaseType with
-        | Some(b) -> b.Parse str
+        | Some(b) -> b.ParseCore(actualType, str)
         | None -> invalidOp (sprintf "Missing parsing logic for type %A" this.Name)
 
-    abstract member Serialize: obj -> string option
-    default this.Serialize (o: obj) : string option =
+    abstract member SerializeCore: YANGType * obj -> string option
+    default this.SerializeCore(actualType: YANGType, o: obj) =
         match this.BaseType with
-        | Some(b) -> b.Serialize o
+        | Some(b) -> b.SerializeCore(actualType, o)
         | None -> invalidOp (sprintf "Missing serializing logic for type %A" this.Name)
 
-
-/// The `decimal64` YANG type.
-and YANGDecimal64Type() =
-    inherit YANGType({ Namespace = YANGNamespace.Default; Name = "decimal64" })
-    
-    let mutable _digits = 0
-    let mutable _min = 0.0
-    let mutable _max = 0.0
-    let mutable _formatString: string = null;
-
-    member this.SetFractionDigits n =
-        if n >= 1 && n <= 18 then
-            _digits <- n
-            _min <- (float Int64.MinValue) / (10.0 ** float n)
-            _max <- (float Int64.MaxValue) / (10.0 ** float n)
-            _formatString <- sprintf "{0:0.%s}" (String('0', n))
-            Ok()
-        else
-            Error()
-
-    override this.Parse str =
-        if _digits = 0 then
-            invalidOp "Cannot call `Parse` before setting fraction digits."
-
-        if isNull str then
-            None
-        else
-        
-            // A decimal64 number is just a signed 64 bit integer with a decimal point in the middle.
-            // This means that we can parse it like any other ordinary floating point number,
-            // and then we just check that it is between Int64.MinValue * 10^(-digits)
-            // and Int64.MaxValue * 10^(-digits).
-            // We also need to check that contains at least one decimal digit, since integers are not allowed,
-            // and TryParse would parse them.
-
-            let dotIndex = str.IndexOf('.')
-            if dotIndex < 1 || dotIndex > str.Length - 2 then
-                None
-            else
-
-                let numberStyle =
-                    NumberStyles.AllowDecimalPoint |||
-                    NumberStyles.AllowLeadingWhite |||
-                    NumberStyles.AllowTrailingWhite |||
-                    NumberStyles.AllowLeadingSign
-                match System.Double.TryParse(str, numberStyle, NumberFormatInfo.InvariantInfo) with
-                | (true, n) ->
-                    if n >= _min && n <= _max then
-                        Some(box n)
-                    else
-                        None
-                | _ -> None
-
-
-    override this.Serialize o =
-        if _digits = 0 then
-            invalidOp "Cannot call `Serialize` before setting fraction digits."
-        
-        if o :? float then
-            let n = o :?> float
-            if n < _min || n > _max then
-                None
-            else
-                Some (n.ToString _formatString)
-        else
-            None
+    abstract member CheckRequiredPropertiesCore: YANGType -> Result<unit, SchemaError list>
+    default this.CheckRequiredPropertiesCore(actualType) =
+        match this.BaseType with
+        | Some(b) -> b.CheckRequiredPropertiesCore(actualType)
+        | None -> Ok()
 
 
 /// Static class with all the primitive types defined by YANG.
@@ -376,7 +343,7 @@ and YANGPrimitiveTypes private () =
         {
             new YANGType({ Namespace = YANGNamespace.Default; Name = name }) with
 
-                override this.Parse str =
+                override this.ParseCore(_, str) =
                     if isNull str then
                         None
                     else
@@ -384,29 +351,35 @@ and YANGPrimitiveTypes private () =
                         | (true, obj) -> Some(box obj)
                         | _ -> None
 
-                override this.Serialize o =
+                override this.SerializeCore(_, o) =
                     if isNull o || not (o :? 'T)then
                         None
                     else
                         Some(o.ToString())
+
+                override this.CanBeRestrictedWith r =
+                    r :? YANGRangeRestriction
 
         }
 
     static member Empty = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "empty" }) with
 
-            override this.Parse _ =
+            override this.ParseCore(_, _) =
                 None
 
-            override this.Serialize _ =
+            override this.SerializeCore(_, _) =
                 None
+
+            override this.CanBeRestrictedWith r =
+                false
 
     }
 
     static member Boolean = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "boolean" }) with
 
-            override this.Parse str =
+            override this.ParseCore(_, str) =
                 if isNull str then
                     None
                 else if str = "true" then
@@ -416,11 +389,14 @@ and YANGPrimitiveTypes private () =
                 else
                     None
 
-            override this.Serialize o =
+            override this.SerializeCore(_, o) =
                 if isNull o || not (o :? bool) then
                     None
                 else
                     Some(if o :?> bool then "true" else "false")
+
+            override this.CanBeRestrictedWith r =
+                false
 
     }
 
@@ -433,27 +409,101 @@ and YANGPrimitiveTypes private () =
     static member UInt32 = YANGPrimitiveTypes.MakeIntegralType "uint32" System.UInt32.TryParse
     static member UInt64 = YANGPrimitiveTypes.MakeIntegralType "uint64" System.UInt64.TryParse
 
+    static member Decimal64 = {
+        new YANGType({ Namespace = YANGNamespace.Default; Name = "decimal64" }) with
+
+            override this.ParseCore(actualType, str) =
+                let digits =
+                    match actualType.GetProperty<int>("fraction-digits") with
+                    | Some(d) when d >= 1 && d <= 18 -> d
+                    | _ -> invalidArg "fraction-digits" "Invalid value for required property \"fraction-digits\": allowed values are from 0 to 18."
+
+                if isNull str then
+                    None
+                else
+                
+                    let min = (float Int64.MinValue) / (10.0 ** float digits)
+                    let max = (float Int64.MaxValue) / (10.0 ** float digits)
+                    
+                    // A decimal64 number is just a signed 64 bit integer with a decimal point in the middle.
+                    // This means that we can parse it like any other ordinary floating point number,
+                    // and then we just check that it is between Int64.MinValue * 10^(-digits)
+                    // and Int64.MaxValue * 10^(-digits).
+                    // We also need to check that contains at least one decimal digit, since integers are not allowed,
+                    // and TryParse would parse them.
+
+                    let dotIndex = str.IndexOf('.')
+                    if dotIndex < 1 || dotIndex > str.Length - 2 then
+                        None
+                    else
+
+                        let numberStyle =
+                            NumberStyles.AllowDecimalPoint |||
+                            NumberStyles.AllowLeadingWhite |||
+                            NumberStyles.AllowTrailingWhite |||
+                            NumberStyles.AllowLeadingSign
+                        match System.Double.TryParse(str, numberStyle, NumberFormatInfo.InvariantInfo) with
+                        | (true, n) ->
+                            if n >= min && n <= max then
+                                Some(box n)
+                            else
+                                None
+                        | _ -> None
+
+            override this.SerializeCore(actualType, o) =
+                let digits =
+                    match actualType.GetProperty<int>("fraction-digits") with
+                    | Some(d) when d >= 1 && d <= 18 -> d
+                    | _ -> invalidArg "fraction-digits" "Invalid value for required property \"fraction-digits\": allowed values are from 0 to 18."
+                
+                if o :? float then
+                    let n = o :?> float
+                    let min = (float Int64.MinValue) / (10.0 ** float digits)
+                    let max = (float Int64.MaxValue) / (10.0 ** float digits)
+
+                    if n < min || n > max then
+                        None
+                    else
+                        let formatString = sprintf "{0:0.%s}" (String('0', digits))
+                        Some (n.ToString(formatString))
+                else
+                    None
+
+            override this.CanBeRestrictedWith r =
+                r :? YANGRangeRestriction
+
+            override this.CheckRequiredPropertiesCore(actualType) =
+                match actualType.GetProperty<int>("fraction-digits") with
+                    | Some(d) when d >= 1 && d <= 18 -> Ok()
+                    | Some _ -> Error([ ArgumentParserError(actualType.OriginalStatement.Value, "Invalid value for required property \"fraction-digits\": allowed values are from 0 to 18.") ])
+                    | None -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "fraction-digits") ])
+
+    }
+
     static member String = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "string" }) with
 
-            override this.Parse str =
+            override this.ParseCore(_, str) =
                 if isNull str then
                     None
                 else
                     Some(str :> obj)
 
-            override this.Serialize o =
+            override this.SerializeCore(_, o) =
                 if isNull o || not (o :? string) then
                     None
                 else
                     Some(o :?> string)
+
+            override this.CanBeRestrictedWith r =
+                r :? YANGLengthRestriction || r :? YANGPatternRestriction
 
     }
 
     static member Binary = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "string" }) with
 
-            override this.Parse str =
+            override this.ParseCore(_, str) =
                 if isNull str then 
                     None
                 else
@@ -462,11 +512,14 @@ and YANGPrimitiveTypes private () =
                     with
                     | :? FormatException -> None
 
-            override this.Serialize o =
+            override this.SerializeCore(_, o) =
                 if isNull o || not (o :? byte[]) then
                     None
                 else
                     Some(Convert.ToBase64String(o :?> byte[]))
+
+            override this.CanBeRestrictedWith r =
+                r :? YANGLengthRestriction
 
     }
 
@@ -484,6 +537,7 @@ and YANGPrimitiveTypes private () =
         | "uint64" -> Some(YANGPrimitiveTypes.UInt64)
         | "string" -> Some(YANGPrimitiveTypes.String)
         | "binary" -> Some(YANGPrimitiveTypes.Binary)
+        | "decimal64" -> Some(YANGPrimitiveTypes.Decimal64)
         | _ -> None
         
 

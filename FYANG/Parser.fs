@@ -90,15 +90,22 @@ type SchemaParserContext(rootStatement: Statement) =
 
     /// Resolves a reference to a type.
     member this.ResolveTypeRef(prefix: string option, name: string) =
-        // Check if it's a reference to a primitive type
         match prefix, YANGPrimitiveTypes.FromName(name) with
-        | None, Some(primitiveType) -> Some(primitiveType)
+        
+        // Reference to a primitive type
+        | None, Some(primitiveType) ->
+            Some(primitiveType)
+
+        // We can either have an unprefixed reference, or a prefixed reference that is using
+        // the same prefix of the module we are parsing. In both cases, resolve from the current scope.
         | None, None ->
-            // We have an unprefixed reference, so resolve the reference from the current scope
             this.GetType({ Namespace = this.Scope.Module.Namespace; Name = name })
+        | Some(p), _ when p = this.Scope.Module.Prefix ->
+            this.GetType({ Namespace = this.Scope.Module.Namespace; Name = name })
+
+        // We have a prefixed reference, so resolve the module associated to the prefix,
+        // then search between it's exported types
         | Some(p), _ ->
-            // We have a prefixed reference, so resolve the module associated to the prefix,
-            // then search between it's exported types
             match this.Scope.Prefixes.TryGetValue(p) with
             | (true, m) ->
                 let fullName = { Namespace = m.Namespace; Name = name }
@@ -485,6 +492,9 @@ let arg (parser: FParsec.Primitives.Parser<_, unit>) : SchemaParser<_> =
 /// Argument parser for an unqualified identifier.
 let unqualifiedIdentifier = arg Statements.id
 
+/// Argument parser for an unsigned int.
+let uint = arg FParsec.CharParsers.puint32
+
 /// Argument parser for a qualified identifier.
 /// Parses an identifier and as namespace uses the current namespace of the parsing context.
 let identifier : SchemaParser<YANGName> =
@@ -508,7 +518,7 @@ let typeRef : SchemaParser<YANGType> =
             | Some(t) -> Ok(t)
             | None -> Error([ UnresolvedTypeRef(ctx.Statement, ctx.Statement.Argument.Value) ])
 
-/// Argument parser a Uri.
+/// Argument parser for a Uri.
 let uri : SchemaParser<Uri> =
     fun ctx ->
         match Uri.TryCreate(ctx.Statement.Argument.Value, UriKind.Absolute) with
@@ -548,6 +558,12 @@ let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
 // Actual parsers
 // ------------------------------------------------------------------
 
+type YANGTypeRef(t: YANGType) =
+    inherit YANGNode()
+    member val Value = t with get, set
+    member val AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
+    member val AdditionalProperties = Dictionary<string, obj>()
+
 /// Shorthand function to create a spec for a statement representing a type restriction.
 /// Automatically configures the optional substatements `description`, `error-app-tag`,
 /// `error-message` and `reference`.
@@ -559,10 +575,14 @@ let createRestrictionSpec name (ctor: 'a -> #YANGTypeRestriction) (argParser: Sc
         prop any Optional <@ fun x -> x.Reference @>;
     ])
 
-type YANGTypeRef(t: YANGType) =
-    inherit YANGNode()
-    member __.Value = t
-    member __.AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
+    // Before returning the restriction, check that the enclosing type supports it
+    >=> (fun r ctx ->
+        let t = ctx.Scope.ParentNode :?> YANGTypeRef
+        if t.Value.CanBeRestrictedWith(r) then
+            Ok(r)
+        else
+            Error([ InvalidTypeRestriction(r.OriginalStatement.Value, t.Value) ])
+    )
 
 let prangeRestriction : StatementSpec<YANGRangeRestriction> =
     createRestrictionSpec
@@ -588,6 +608,11 @@ let ptype : StatementSpec<YANGTypeRef> =
         YANGTypeRef
         typeRef
         (anyOf [
+            property "fraction-digits" uint Optional (fun node digits _ ->
+                node.AdditionalProperties.Add("fraction-digits", int digits)
+                Ok()
+            );
+
             chld prangeRestriction   Optional <@ fun x -> x.AdditionalRestrictions @>;
             chld plengthRestriction  Optional <@ fun x -> x.AdditionalRestrictions @>;
             chld ppatternRestriction Many     <@ fun x -> x.AdditionalRestrictions @>;
@@ -602,7 +627,10 @@ let ptypedef : StatementSpec<YANGType> =
             child ptype Required (fun node value _ ->
                 node.BaseType <- Some value.Value
                 node.Restrictions.AddRange(value.AdditionalRestrictions)
-                Ok()
+                value.AdditionalProperties |> Seq.iter (fun pair -> node.SetProperty(pair.Key, pair.Value))
+                
+                // Check that the required properties have been provided
+                node.CheckRequiredProperties()
             );
 
             property "default" any    Optional (fun x value _ -> x.Default <- value; Ok());
