@@ -444,7 +444,7 @@ and YANGPrimitiveTypes private () =
                             NumberStyles.AllowLeadingSign
                         match System.Double.TryParse(str, numberStyle, NumberFormatInfo.InvariantInfo) with
                         | (true, n) ->
-                            if n >= min && n <= max then
+                            if (not (Double.IsNaN n)) && n >= min && n <= max then
                                 Some(box n)
                             else
                                 None
@@ -461,11 +461,11 @@ and YANGPrimitiveTypes private () =
                     let min = (float Int64.MinValue) / (10.0 ** float digits)
                     let max = (float Int64.MaxValue) / (10.0 ** float digits)
 
-                    if n < min || n > max then
+                    if Double.IsNaN(n) || n < min || n > max then
                         None
                     else
-                        let formatString = sprintf "{0:0.%s}" (String('0', digits))
-                        Some (n.ToString(formatString))
+                        let formatString = sprintf "0.%s" (String('0', digits))
+                        Some (n.ToString(formatString, NumberFormatInfo.InvariantInfo))
                 else
                     None
 
