@@ -476,6 +476,22 @@ let chld (childSpec: StatementSpec<_>) cardinality (expr: Expr<'a -> #IList>) : 
         Ok()
     )
 
+/// Creates a StatementSpec whose SchemaParser forwards to the reference cell.
+let createSpecForwaredToRef name cardinality : StatementSpec<'a> * StatementSpec<'a> ref =
+    let cell = FSharp.Core.Operators.ref({
+        Name = name;
+        Cardinality = cardinality;
+        Parser = fun ctx -> Ok(Unchecked.defaultof<'a>)
+    })
+    let spec = {
+        Name = name;
+        Cardinality = cardinality;
+        Parser =
+            fun ctx ->
+                (!cell).Parser ctx
+    }
+    (spec, cell)
+
 /// Argument parser that accepts any string.
 let any : SchemaParser<string> =
     fun ctx ->
@@ -494,6 +510,41 @@ let unqualifiedIdentifier = arg Statements.id
 
 /// Argument parser for an unsigned int.
 let uint = arg FParsec.CharParsers.puint32
+
+/// Argument parser for a positive integer.
+let positiveInt =
+    fun ctx ->
+        arg FParsec.CharParsers.pint32 ctx
+        |> Result.bind (fun res ->
+            if res < 0 then
+                Error([ ArgumentParserError(ctx.Statement, "Expected non negative integer.") ])
+            else
+                Ok(res)
+        )
+
+/// Argument parser for a positive integer or the string "unbounded",
+/// which gets parsed to Int32.MaxValue.
+let positiveIntOrUnbounded =
+    let rawParser =
+        FParsec.Primitives.choice [
+            FParsec.CharParsers.pint32;
+            FParsec.Primitives.(|>>) (FParsec.CharParsers.pstring "unbounded") (fun _ -> Int32.MaxValue)
+        ]
+    fun ctx ->
+        arg rawParser ctx
+        |> Result.bind (fun res ->
+            if res < 0 then
+                Error([ ArgumentParserError(ctx.Statement, "Expected non negative integer.") ])
+            else
+                Ok(res)
+        )
+
+/// Argument parser for a boolean.
+let boolean : SchemaParser<bool> =
+    fun ctx ->
+        match Boolean.TryParse(ctx.Statement.Argument.Value) with
+        | (true, b) -> Ok(b)
+        | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid boolean value.") ])
 
 /// Argument parser for a qualified identifier.
 /// Parses an identifier and as namespace uses the current namespace of the parsing context.
@@ -541,6 +592,14 @@ let status : SchemaParser<YANGStatus> =
         | "deprecated" -> Ok(YANGStatus.Deprecated)
         | "obsolete" -> Ok(YANGStatus.Obsolete)
         | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid status. The passible values are `current`, `deprecated` or `obsolete`.") ])
+
+/// Argument parser for a ordered-by statement.
+let orderedBy : SchemaParser<YANGListOrderedBy> =
+    fun ctx ->
+        match ctx.Statement.Argument.Value with
+        | "system" -> Ok(YANGListOrderedBy.System)
+        | "user" -> Ok(YANGListOrderedBy.User)
+        | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid ordering. The passible values are `system` or `user`.") ])
 
 /// Helper operator to execute an action after a parser only if it succeeds.
 let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
@@ -656,33 +715,134 @@ let ptypedef : StatementSpec<YANGType> =
         |> Result.map (fun _ -> t)
     )
 
-let pcontainer : StatementSpec<YANGContainer> =
+
+// Parsers for all the data nodes.
+// They are all forwarded because they are all mutually recursive.
+let pcontainer, pcontainerRef: StatementSpec<YANGContainer> * _  = createSpecForwaredToRef "container"  Required
+let pleaf,      pleafRef:      StatementSpec<YANGLeaf> * _       = createSpecForwaredToRef "leaf"       Required
+let pleaflist,  pleaflistRef:  StatementSpec<YANGLeafList> * _   = createSpecForwaredToRef "leaf-list"  Required
+let plist,      plistRef:      StatementSpec<YANGList> * _       = createSpecForwaredToRef "list"       Required
+
+pcontainerRef :=
     createSpec
         "container"
         YANGContainer
         identifier
-        (anyOf [])
+        (anyOf [
+            // Container-specific properties
+            prop any    Optional <@ fun x -> x.Presence @>;
 
-let pleaf : StatementSpec<YANGLeaf> =
+            // Common properties for data nodes
+            prop any    Optional <@ fun x -> x.Description @>;
+            prop any    Optional <@ fun x -> x.Reference @>;
+            prop status Optional <@ fun x -> x.Status @>;
+
+            // Typedefs
+            child ptypedef Many (fun _ _ _ -> Ok());
+
+            // Data statements
+            chld pcontainer Many <@ fun x -> x.DataNodes @>;
+            chld pleaf      Many <@ fun x -> x.DataNodes @>;
+            chld pleaflist  Many <@ fun x -> x.DataNodes @>;
+            chld plist      Many <@ fun x -> x.DataNodes @>;
+        ])
+
+pleafRef :=
     createSpec
         "leaf"
         YANGLeaf
         identifier
-        (anyOf [])
+        (anyOf [
+            // Leaf-specific properties
+            property "default" any     Optional (fun x value _ -> x.Default <- value; Ok());
+            prop               any     Optional <@ fun x -> x.Units @>;
+            prop               boolean Optional <@ fun x -> x.Mandatory @>;
+            child ptype Required (fun node value _ ->
+                let newType = YANGType(value.Value.Name, BaseType = Some value.Value)
+                newType.Restrictions.AddRange(value.AdditionalRestrictions)
+                value.AdditionalProperties |> Seq.iter (fun pair -> newType.SetProperty(pair.Key, pair.Value))
+                node.Type <- newType
+                
+                // Check that the required properties have been provided
+                newType.CheckRequiredProperties()
+            );
 
-let pleaflist : StatementSpec<YANGLeafList> =
+            // Common properties for data nodes
+            prop any     Optional <@ fun x -> x.Description @>;
+            prop any     Optional <@ fun x -> x.Reference @>;
+            prop status  Optional <@ fun x -> x.Status @>;
+        ])
+
+    // If a default value has been provided, check that it's valid
+    >=> (fun leaf ctx ->
+        if not (isNull leaf.Default) then
+            match leaf.Type.IsValid(leaf.Default) with
+            | Ok _ -> Ok(leaf)
+            | Error(restriction) -> Error([ InvalidLeafDefault(leaf, restriction) ])
+        else
+            Ok(leaf)
+    )
+
+    // Mandatory leafs cannot have a default value
+    >=> (fun leaf ctx ->
+        if leaf.Mandatory && not (isNull leaf.Default) then
+            Error([ SchemaError(leaf, "Mandatory leafs cannot have a default value.") ])
+        else
+            Ok(leaf)
+    )
+
+pleaflistRef :=
     createSpec
         "leaf-list"
         YANGLeafList
         identifier
-        (anyOf [])
+        (anyOf [
+            // LeafList-specific properties
+            prop positiveInt            Optional <@ fun x -> x.MinElements @>
+            prop positiveIntOrUnbounded Optional <@ fun x -> x.MaxElements @>
+            prop orderedBy              Optional <@ fun x -> x.OrderedBy @>;
+            prop any                    Optional <@ fun x -> x.Units @>;
+            child ptype Required (fun node value _ ->
+                let newType = YANGType(value.Value.Name, BaseType = Some value.Value)
+                newType.Restrictions.AddRange(value.AdditionalRestrictions)
+                value.AdditionalProperties |> Seq.iter (fun pair -> newType.SetProperty(pair.Key, pair.Value))
+                node.Type <- newType
+                
+                // Check that the required properties have been provided
+                newType.CheckRequiredProperties()
+            );
 
-let plist : StatementSpec<YANGList> =
+            // Common properties for data nodes
+            prop any     Optional <@ fun x -> x.Description @>;
+            prop any     Optional <@ fun x -> x.Reference @>;
+            prop status  Optional <@ fun x -> x.Status @>;
+        ])
+
+plistRef :=
     createSpec
         "list"
         YANGList
         identifier
-        (anyOf [])
+        (anyOf [
+            // List-specific properties
+            prop positiveInt            Optional <@ fun x -> x.MinElements @>
+            prop positiveIntOrUnbounded Optional <@ fun x -> x.MaxElements @>
+            prop orderedBy              Optional <@ fun x -> x.OrderedBy @>;
+
+            // Common properties for data nodes
+            prop any     Optional <@ fun x -> x.Description @>;
+            prop any     Optional <@ fun x -> x.Reference @>;
+            prop status  Optional <@ fun x -> x.Status @>;
+
+            // Typedefs
+            child ptypedef Many (fun _ _ _ -> Ok());
+
+            // Data statements
+            chld pcontainer Many <@ fun x -> x.DataNodes @>;
+            chld pleaf      Many <@ fun x -> x.DataNodes @>;
+            chld pleaflist  Many <@ fun x -> x.DataNodes @>;
+            chld plist      Many <@ fun x -> x.DataNodes @>;
+        ])
 
 let pmodulerevision : StatementSpec<YANGModuleRevision> =
     createSpec

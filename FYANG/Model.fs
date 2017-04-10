@@ -30,14 +30,23 @@ type YANGStatus =
     | Deprecated = 2
     | Obsolete = 3
 
+/// Ordering of a list.
+/// With `System` the ordering of the elements in the list has no meaning,
+/// while with `User`, the ordering of the children is important and must be respected.
+/// See RFC 6020 section 7.7.1 for other details.
+type YANGListOrderedBy =
+    | System = 1
+    | User = 2
+
 
 /// Representation of all the possible errors that can happen
 /// during the parsing and validation of a YANG model
 [<StructuredFormatDisplay("{Text}")>]
 type SchemaError =
     
-    // Generic syntax error
+    // Generic errors
     | ParserError of string
+    | SchemaError of YANGNode * string
     
     // YANG Version
     | UnsupportedYangVersion of Statement * string
@@ -62,6 +71,7 @@ type SchemaError =
     // Types
     | ShadowedType of Statement * YANGType
     | InvalidDefault of YANGType * YANGTypeRestriction
+    | InvalidLeafDefault of YANGLeaf * YANGTypeRestriction
     | UnresolvedTypeRef of Statement * string
     | InvalidTypeRestriction of Statement * YANGType
 
@@ -74,6 +84,8 @@ type SchemaError =
                 match this with
                 | ParserError(x) ->
                     None, x
+                | SchemaError(x, y) ->
+                    x.OriginalStatement, y
                 | UnsupportedYangVersion(x, y) ->
                     Some x, (sprintf "Unsupported YANG version %s." y)
                 | ArgumentExpected(x) ->
@@ -115,6 +127,12 @@ type SchemaError =
                         | Some(s) -> s.Position.ToString()
                         | None -> "<position not available>"
                     x.OriginalStatement, (sprintf "This type has an invalid default value. See restriction at %s." restriction)
+                | InvalidLeafDefault(x, y) ->
+                    let restriction =
+                        match y.OriginalStatement with
+                        | Some(s) -> s.Position.ToString()
+                        | None -> "<position not available>"
+                    x.OriginalStatement, (sprintf "This leaf has an invalid default value. See restriction at %s." restriction)
                 | UnresolvedTypeRef(x, y) ->
                     Some x, (sprintf "Cannot find type %s." y)
                 | InvalidTypeRestriction(x, y) ->
@@ -581,25 +599,53 @@ and YANGModuleRevision(date: DateTime) =
     member val Reference: string = null with get, set
 
 
-type YANGContainer(name: YANGName) =
+and YANGContainer(name: YANGName) =
     inherit YANGDataNode()
 
     member this.Name = name
+    member val Presence: string = null with get, set
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+    member val DataNodes = ResizeArray<YANGDataNode>()
     
 
-type YANGLeaf(name: YANGName) =
+and YANGLeaf(name: YANGName) =
     inherit YANGDataNode()
 
     member this.Name = name
+    member val Type: YANGType = Unchecked.defaultof<YANGType> with get, set
+    member val Units: string = null with get, set
+    member val Default: obj = null with get, set
+    member val Mandatory: bool = false with get, set
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
 
 
-type YANGLeafList(name: YANGName) =
+and YANGLeafList(name: YANGName) =
     inherit YANGDataNode()
 
     member this.Name = name
+    member val Description: string = null with get, set
+    member val MaxElements = Int32.MaxValue with get, set
+    member val MinElements = 0 with get, set
+    member val OrderedBy = YANGListOrderedBy.System with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+    member val Type = Unchecked.defaultof<YANGType> with get, set
+    member val Units: string = null with get, set
 
 
-type YANGList(name: YANGName) =
+and YANGList(name: YANGName) =
     inherit YANGDataNode()
 
     member this.Name = name
+    member val Description: string = null with get, set
+    member val MinElements = 0 with get, set
+    member val MaxElements = Int32.MaxValue with get, set
+    member val OrderedBy = YANGListOrderedBy.System with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+    member val Unique = ResizeArray<string>()
+    member val DataNodes = ResizeArray<YANGDataNode>()
