@@ -1,13 +1,13 @@
-﻿namespace FYANG.Tests
+﻿namespace FsCPS.Tests.Yang
 
 open System
 open System.Globalization
 open Xunit
 open FsCheck
 open FsCheck.Xunit
-open FYANG
-open FYANG.Statements
-open FYANG.Model
+open FsCPS.Yang
+open FsCPS.Yang.Statements
+open FsCPS.Yang.Model
 
 // Integer used to represent the value of the `fraction-digits` property
 type FractionDigits = FractionDigits of int

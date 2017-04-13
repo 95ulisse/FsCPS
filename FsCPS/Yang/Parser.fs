@@ -1,4 +1,4 @@
-module FYANG.Parser
+module FsCPS.Yang.Parser
 
 open System
 open System.Collections
@@ -6,8 +6,8 @@ open System.Collections.Generic
 open System.Text.RegularExpressions
 open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Quotations.Patterns
-open FYANG.Statements
-open FYANG.Model
+open FsCPS.Yang.Statements
+open FsCPS.Yang.Model
 
 /// Result of a parser.
 /// It can either be an error or a success, in which case the parsed element is returned.
@@ -914,15 +914,3 @@ let pmodule : StatementSpec<YANGModule> =
 // Public interface
 // ------------------------------------------------------------------
 
-type YANGParser() =
-
-    member __.ParseModule str =
-
-        // Parses the string as a tree of statements
-        match FParsec.CharParsers.run Statements.root str with
-        | FParsec.CharParsers.Failure(e, _, _) -> Error([ ParserError(e) ])
-        | FParsec.CharParsers.Success(statement, _, _) ->
-
-            // Transforms the statements to the actual schema tree
-            let ctx = SchemaParserContext(statement)
-            pmodule.Parser ctx

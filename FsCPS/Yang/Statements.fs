@@ -1,4 +1,4 @@
-module FYANG.Statements
+module FsCPS.Yang.Statements
 
 open System
 open System.Collections.Generic

@@ -1,11 +1,10 @@
-
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.26403.0
+VisualStudioVersion = 15.0.26403.3
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FYANG", "FYANG\FYANG.fsproj", "{DC2D5E94-9E4C-4D2C-A638-DF893BA96D5E}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FsCPS", "FsCPS\FsCPS.fsproj", "{DC2D5E94-9E4C-4D2C-A638-DF893BA96D5E}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FYANG.Tests", "FYANG.Tests\FYANG.Tests.fsproj", "{C48B34AD-6C78-4B31-9F1A-09964CBFB3A1}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FsCPS.Tests", "FsCPS.Tests\FsCPS.Tests.fsproj", "{C48B34AD-6C78-4B31-9F1A-09964CBFB3A1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

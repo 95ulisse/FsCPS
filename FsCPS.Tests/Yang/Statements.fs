@@ -1,10 +1,10 @@
-namespace FYANG.Tests
+namespace FsCPS.Tests.Yang
 
 open System
 open FParsec
 open Xunit
-open FYANG.Statements
-open FYANG.Tests.Utils
+open FsCPS.Yang.Statements
+open FsCPS.Tests.Utils
 
 module Identifiers =
 

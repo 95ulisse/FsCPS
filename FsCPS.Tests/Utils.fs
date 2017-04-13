@@ -1,7 +1,7 @@
-namespace FYANG.Tests
+namespace FsCPS.Tests
 
-open FYANG.Statements
-open FYANG.Parser
+open FsCPS.Yang.Statements
+open FsCPS.Yang.Parser
 open FParsec
 open Xunit
 open Xunit.Sdk

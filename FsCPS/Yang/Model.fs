@@ -1,10 +1,11 @@
-module FYANG.Model
+namespace FsCPS.Yang.Model
 
 open System
 open System.Collections.Generic
 open System.Globalization
 open System.Text.RegularExpressions
-open FYANG.Statements
+open FsCPS.Yang
+open FsCPS.Yang.Statements
 
 
 /// Base class for all YANG nodes
