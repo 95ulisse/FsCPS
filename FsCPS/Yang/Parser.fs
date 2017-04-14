@@ -643,6 +643,42 @@ let createRestrictionSpec name (ctor: 'a -> #YANGTypeRestriction) (argParser: Sc
             Error([ InvalidTypeRestriction(r.OriginalStatement.Value, t.Value) ])
     )
 
+/// Checks if an enum value is valid: checks the uniqueness of the name
+/// and of the value. If the value has not been provided, it automatically computes
+/// and assignes the next one.
+let checkNewEnumValue (node: YANGTypeRef) (enumValue: YANGEnumValue) =
+    let currentValues =
+        match node.AdditionalProperties.TryGetValue("enum-values") with
+        | (true, l) -> l :?> seq<YANGEnumValue>
+        | _ -> Seq.empty
+    
+    let mutable computedValue = None
+    let mutable result = Ok()
+    Seq.append currentValues (YANGPrimitiveTypes.AllEnumValues node.Value)
+    |> Seq.forall (fun v ->
+        if v.Name = enumValue.Name then
+            result <- Error([ DuplicateEnumName(enumValue) ])
+            false
+        else if enumValue.Value.IsSome && enumValue.Value.Value = v.Value.Value then
+            result <- Error([ DuplicateEnumValue(enumValue) ])
+            false
+        else
+            computedValue <-
+                match computedValue with
+                | Some(c) -> Some(max c v.Value.Value)
+                | None -> Some(v.Value.Value)
+            true
+    ) |> ignore
+
+    match enumValue.Value, computedValue with
+    | Some _, _ -> ()
+    | None, Some c -> enumValue.Value <- Some(c + 1)
+    | None, None -> enumValue.Value <- Some(0)
+
+    result
+
+
+
 let prangeRestriction : StatementSpec<YANGRangeRestriction> =
     createRestrictionSpec
         "range"
@@ -661,6 +697,21 @@ let ppatternRestriction : StatementSpec<YANGPatternRestriction> =
         YANGPatternRestriction
         regex
 
+let penum : StatementSpec<YANGEnumValue> =
+    createSpec
+        "enum"
+        YANGEnumValue
+        unqualifiedIdentifier
+        (anyOf [
+            prop any                              Optional <@ fun x -> x.Description @>;
+            prop any                              Optional <@ fun x -> x.Reference @>;
+            prop status                           Optional <@ fun x -> x.Status @>;
+            property "value" (arg FParsec.CharParsers.pint32) Optional (fun node value _ ->
+                node.Value <- Some value
+                Ok()
+            );
+        ])
+
 let ptype : StatementSpec<YANGTypeRef> =
     createSpec
         "type"
@@ -670,6 +721,16 @@ let ptype : StatementSpec<YANGTypeRef> =
             property "fraction-digits" uint Optional (fun node digits _ ->
                 node.AdditionalProperties.Add("fraction-digits", int digits)
                 Ok()
+            );
+
+            child penum Many (fun node enumValue _ ->
+                match checkNewEnumValue node enumValue with
+                | Ok() ->
+                    match node.AdditionalProperties.TryGetValue("enum-values") with
+                    | (true, l) -> (l :?> IList<YANGEnumValue>).Add(enumValue)
+                    | _ -> node.AdditionalProperties.Add("enum-values", ResizeArray([ enumValue ]))
+                    Ok()
+                | Error(l) -> Error(l)
             );
 
             chld prangeRestriction   Optional <@ fun x -> x.AdditionalRestrictions @>;
@@ -907,10 +968,3 @@ let pmodule : StatementSpec<YANGModule> =
                 chld plist      Many <@ fun x -> x.DataNodes @>;
             ]
         ])
-
-
-
-// ------------------------------------------------------------------
-// Public interface
-// ------------------------------------------------------------------
-

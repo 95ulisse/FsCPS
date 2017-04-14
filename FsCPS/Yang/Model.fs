@@ -31,6 +31,7 @@ type YANGStatus =
     | Deprecated = 2
     | Obsolete = 3
 
+
 /// Ordering of a list.
 /// With `System` the ordering of the elements in the list has no meaning,
 /// while with `User`, the ordering of the children is important and must be respected.
@@ -75,6 +76,8 @@ type SchemaError =
     | InvalidLeafDefault of YANGLeaf * YANGTypeRestriction
     | UnresolvedTypeRef of Statement * string
     | InvalidTypeRestriction of Statement * YANGType
+    | DuplicateEnumName of YANGEnumValue
+    | DuplicateEnumValue of YANGEnumValue
 
     with
 
@@ -138,6 +141,10 @@ type SchemaError =
                     Some x, (sprintf "Cannot find type %s." y)
                 | InvalidTypeRestriction(x, y) ->
                     Some(x), (sprintf "This restriction cannot be applied to the type %A." y.Name)
+                | DuplicateEnumName(x) ->
+                    x.OriginalStatement, (sprintf "The enum name \"%s\" has already been used." x.Name)
+                | DuplicateEnumValue(x) ->
+                    x.OriginalStatement, (sprintf "The enum value \"%d\" has already been used." x.Value.Value)
             
             match stmt with
             | Some(s) -> sprintf "Statement \"%s\" (%A): %s" s.Name s.Position msg
@@ -183,7 +190,7 @@ and [<AbstractClass>] YANGTypeRestriction() =
 
 
 /// Restriction on the value of a numeral type.
-and YANGRangeRestriction(ranges: Statements.Range<float> list) =
+and YANGRangeRestriction(ranges: Range<float> list) =
     inherit YANGTypeRestriction()
 
     override this.IsValid o =
@@ -201,7 +208,7 @@ and YANGRangeRestriction(ranges: Statements.Range<float> list) =
 
 
 /// Restriction on the length of a string or binary data.
-and YANGLengthRestriction(ranges: Statements.Range<uint32> list) =
+and YANGLengthRestriction(ranges: Range<uint32> list) =
     inherit YANGTypeRestriction()
 
     override __.IsValid o =
@@ -236,6 +243,17 @@ and YANGPatternRestriction(r: Regex) =
             r.IsMatch(o :?> string)
         else
             false
+
+
+/// One possible value for a YANG enum type.
+and YANGEnumValue(name: string) =
+    inherit YANGNode()
+
+    member val Name = name
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+    member val Value: int option = None with get, set
 
 
 /// Base class for all YANG data types.
@@ -356,6 +374,18 @@ and YANGType(name: YANGName) =
 
 /// Static class with all the primitive types defined by YANG.
 and YANGPrimitiveTypes private () =
+
+    static member internal AllEnumValues(t: YANGType) =
+        let rec allValues (t: YANGType) =
+            seq {
+                match t.GetProperty<IList<YANGEnumValue>>("enum-values") with
+                | Some l -> yield! l
+                | None -> ()
+                match t.BaseType with
+                | Some b -> yield! allValues b
+                | None -> ()
+            }
+        allValues t
     
     static member private MakeIntegralType<'T> name (tryParse: string -> bool * 'T) =
 
@@ -542,6 +572,68 @@ and YANGPrimitiveTypes private () =
 
     }
 
+    static member Enumeration = {
+        new YANGType({ Namespace = YANGNamespace.Default; Name = "enumeration" }) with
+
+            override this.ParseCore(actualType, str) =
+                if isNull str then
+                    None
+                else
+                    YANGPrimitiveTypes.AllEnumValues(actualType)
+                    |> Seq.tryPick (fun v ->
+                        if v.Name = str then
+                            Some(v :> obj)
+                        else
+                            None
+                    )
+
+            override this.SerializeCore(actualType, value) =
+                let chooser: (YANGEnumValue -> string option) option =
+                    if isNull value then
+                        None
+                    else if value :? string then
+                        Some (
+                            fun v ->
+                                if v.Name = (value :?> string) then
+                                    Some(value :?> string)
+                                else
+                                    None
+                        )
+                    else if value :? int then
+                        Some(
+                            fun v ->
+                                if v.Value.Value = (value :?> int) then
+                                    Some(v.Name)
+                                else
+                                    None
+                        )
+                    else if value :? YANGEnumValue then
+                        Some(
+                            fun v ->
+                                if v = (value :?> YANGEnumValue) then
+                                    Some(v.Name)
+                                else
+                                    None
+                        )
+                    else
+                        None
+                
+                chooser
+                |> Option.bind (fun chooser ->
+                    YANGPrimitiveTypes.AllEnumValues(actualType)
+                    |> Seq.tryPick chooser
+                )
+
+            override this.CanBeRestrictedWith _ =
+                false
+
+            override this.CheckRequiredPropertiesCore(actualType) =
+                match actualType.GetProperty<IList<YANGEnumValue>>("enum-values") with
+                | Some l when l.Count > 0 -> Ok()
+                | _ -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "enum") ])
+
+    }
+
     static member FromName(name: string) =
         match name with
         | "empty" -> Some(YANGPrimitiveTypes.Empty)
@@ -557,6 +649,7 @@ and YANGPrimitiveTypes private () =
         | "string" -> Some(YANGPrimitiveTypes.String)
         | "binary" -> Some(YANGPrimitiveTypes.Binary)
         | "decimal64" -> Some(YANGPrimitiveTypes.Decimal64)
+        | "enumeration" -> Some(YANGPrimitiveTypes.Enumeration)
         | _ -> None
         
 

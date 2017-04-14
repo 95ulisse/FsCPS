@@ -3,11 +3,13 @@
 open System
 open System.Globalization
 open Xunit
+open Xunit.Sdk
 open FsCheck
 open FsCheck.Xunit
 open FsCPS.Yang
 open FsCPS.Yang.Statements
 open FsCPS.Yang.Model
+open FsCPS.Tests.Utils
 
 // Integer used to represent the value of the `fraction-digits` property
 type FractionDigits = FractionDigits of int
@@ -142,3 +144,193 @@ module Decimal64 =
             // We can't use `n` because the serialization might have removed some digits
             t.Parse(serialized).Value :?> float = Double.Parse(serialized, NumberFormatInfo.InvariantInfo)
         )
+
+
+module Enumeration =
+    open System.Collections.Generic
+
+    let createModule inner =
+        YANGParser().ParseModule("""
+            module test {
+                namespace "http://example.com/test-module";
+                prefix test;
+                """ + inner + """
+            }
+        """)
+
+    [<Fact>]
+    let ``Enumerations must have distinct names`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a;
+                        enum b;
+                        enum a;
+                    }
+                }
+            """
+        match m with
+        | Error([ DuplicateEnumName(_) ]) -> ()
+        | _ -> raise (XunitException "Should not have parsed.")
+
+    [<Fact>]
+    let ``Enumerations must have distinct values`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a { value 1; }
+                        enum b { value 2; }
+                        enum c { value 1; }
+                    }
+                }
+            """
+        match m with
+        | Error([ DuplicateEnumValue(_) ]) -> ()
+        | _ -> raise (XunitException "Should not have parsed.")
+
+    [<Fact>]
+    let ``Values are computed automatically and start from 0`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a;
+                        enum b;
+                        enum c;
+                    }
+                }
+            """
+        match m with
+        | Ok(m) ->
+            
+            let t = (m.ExportedTypes.Values |> Seq.head)
+            Assert.Equal("my-type", t.Name.Name)
+            
+            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            Assert.Equal(3, values.Count)
+            Assert.Equal("a", values.[0].Name)
+            Assert.Equal(0, values.[0].Value.Value)
+            Assert.Equal("b", values.[1].Name)
+            Assert.Equal(1, values.[1].Value.Value)
+            Assert.Equal("c", values.[2].Name)
+            Assert.Equal(2, values.[2].Value.Value)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``Values are continued automatically if only some of them are present`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a { value -10; }
+                        enum b;
+                        enum c { value 10; }
+                        enum d;
+                    }
+                }
+            """
+        match m with
+        | Ok(m) ->
+            
+            let t = (m.ExportedTypes.Values |> Seq.head)
+            Assert.Equal("my-type", t.Name.Name)
+            
+            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            Assert.Equal(4, values.Count)
+            Assert.Equal("a", values.[0].Name)
+            Assert.Equal(-10, values.[0].Value.Value)
+            Assert.Equal("b", values.[1].Name)
+            Assert.Equal(-9, values.[1].Value.Value)
+            Assert.Equal("c", values.[2].Name)
+            Assert.Equal(10, values.[2].Value.Value)
+            Assert.Equal("d", values.[3].Name)
+            Assert.Equal(11, values.[3].Value.Value)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``Derived enumerations must have distinct names from base type`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a;
+                        enum b;
+                        enum c;
+                    }
+                }
+                typedef my-type2 {
+                    type my-type {
+                        enum a;
+                    }
+                }
+            """
+        match m with
+        | Error([ DuplicateEnumName(_) ]) -> ()
+        | _ -> raise (XunitException "Should not have parsed.")
+
+    [<Fact>]
+    let ``Derived enumerations must have distinct values from base type`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a { value 1; }
+                        enum b { value 2; }
+                        enum c { value 3; }
+                    }
+                }
+                typedef my-type2 {
+                    type my-type {
+                        enum d { value 1; }
+                    }
+                }
+            """
+        match m with
+        | Error([ DuplicateEnumValue(_) ]) -> ()
+        | _ -> raise (XunitException "Should not have parsed.")
+
+    [<Fact>]
+    let ``Derived enumeration values are continued from the base type`` () =
+        let m =
+            createModule """
+                typedef my-type {
+                    type enumeration {
+                        enum a { value 10; }
+                        enum b;
+                        enum c;
+                    }
+                }
+                typedef my-type2 {
+                    type my-type {
+                        enum d;
+                    }
+                }
+            """
+        match m with
+        | Ok(m) ->
+            
+            let t = (m.ExportedTypes.Values |> Seq.head)
+            Assert.Equal("my-type", t.Name.Name)
+            
+            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            Assert.Equal(3, values.Count)
+            Assert.Equal("a", values.[0].Name)
+            Assert.Equal(10, values.[0].Value.Value)
+            Assert.Equal("b", values.[1].Name)
+            Assert.Equal(11, values.[1].Value.Value)
+            Assert.Equal("c", values.[2].Name)
+            Assert.Equal(12, values.[2].Value.Value)
+
+            let t = (m.ExportedTypes.Values |> Seq.skip 1 |> Seq.head)
+            Assert.Equal("my-type2", t.Name.Name)
+            
+            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            Assert.Equal(1, values.Count)
+            Assert.Equal("d", values.[0].Name)
+            Assert.Equal(13, values.[0].Value.Value)
+
+        | _ -> raise (XunitException "Should have parsed.")
