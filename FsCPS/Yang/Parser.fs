@@ -6,6 +6,7 @@ open System.Collections.Generic
 open System.Text.RegularExpressions
 open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Quotations.Patterns
+open FsCPS
 open FsCPS.Yang.Statements
 open FsCPS.Yang.Model
 

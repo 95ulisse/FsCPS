@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.Globalization
 open System.Text.RegularExpressions
+open FsCPS
 open FsCPS.Yang
 open FsCPS.Yang.Statements
 

@@ -1,5 +1,6 @@
 ﻿namespace FsCPS.Yang
 
+open FsCPS
 open FsCPS.Yang.Model
 open FsCPS.Yang.Parser
 

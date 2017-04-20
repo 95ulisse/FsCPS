@@ -11,8 +11,8 @@
     <OutputType>Library</OutputType>
     <RootNamespace>FYANG</RootNamespace>
     <AssemblyName>FsCPS</AssemblyName>
-    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
-    <TargetFSharpCoreVersion>4.4.1.0</TargetFSharpCoreVersion>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <TargetFSharpCoreVersion>4.3.1.0</TargetFSharpCoreVersion>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Name>FsCPS</Name>
     <TargetFrameworkProfile />
@@ -55,10 +55,14 @@
   <ItemGroup>
     <Content Include="packages.config" />
     <Compile Include="AssemblyInfo.fs" />
+    <Compile Include="Util.fs" />
+    <Compile Include="Native.fs" />
+    <Compile Include="Model.fs" />
     <Compile Include="Yang\Statements.fs" />
-    <Compile Include="Yang\Model.fs" />
+    <Compile Include="Yang\Nodes.fs" />
     <Compile Include="Yang\Parser.fs" />
     <Compile Include="Yang\Yang.fs" />
+    <None Include="Examples\IPAddress.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">
