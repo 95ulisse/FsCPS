@@ -1,7 +1,7 @@
 namespace FsCPS.Tests
 
-open FsCPS.Yang.Statements
-open FsCPS.Yang.Parser
+open FsCPS
+open FsCPS.Yang
 open FParsec
 open Xunit
 open Xunit.Sdk
@@ -39,3 +39,17 @@ module Utils =
             if not (compareStatements r res) then
                 raise (XunitException (sprintf "Expected %A. Got %A." res r))
         | Failure(e, _, _) -> raise (XunitException e)
+
+    let AssertOk res =
+        match res with
+        | Result.Ok x -> x
+        | Result.Error e -> raise (XunitException (sprintf "Expected Ok, but got Error %A." e))
+
+    let CreateModule inner =
+        YANGParser.ParseModule("""
+            module test {
+                namespace "http://example.com/test-module";
+                prefix test;
+                """ + inner + """
+            }
+        """)

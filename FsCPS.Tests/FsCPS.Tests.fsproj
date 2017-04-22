@@ -62,8 +62,9 @@
     <Content Include="packages.config" />
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Utils.fs" />
-    <Compile Include="Yang\Statements.fs" />
+    <Compile Include="Yang\StatementParsers.fs" />
     <Compile Include="Yang\Types.fs" />
+    <Compile Include="Yang\Imports.fs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">

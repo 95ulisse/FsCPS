@@ -37,5 +37,8 @@ open System.Runtime.InteropServices
 [<assembly: AssemblyVersion("1.0.0.0")>]
 [<assembly: AssemblyFileVersion("1.0.0.0")>]
 
+// Internals must be visible to the tests.
+[<assembly: InternalsVisibleTo("FsCPS.Tests")>]
+
 do
     ()

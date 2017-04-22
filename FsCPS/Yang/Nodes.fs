@@ -3,10 +3,10 @@ namespace FsCPS.Yang.Model
 open System
 open System.Collections.Generic
 open System.Globalization
+open System.IO
 open System.Text.RegularExpressions
 open FsCPS
 open FsCPS.Yang
-open FsCPS.Yang.Statements
 
 
 /// Base class for all YANG nodes
@@ -70,6 +70,9 @@ type SchemaError =
     | UnknownPrefix of Statement * string
     | AlreadyUsedPrefix of Statement * Statement
     | AlreadyUsedNamespace of Statement * YANGModule
+    | CannotFindModule of string * seq<string>
+    | CannotOpenModule of string * string
+    | CannotFindModuleRevision of string * DateTime
 
     // Types
     | ShadowedType of Statement * YANGType
@@ -121,6 +124,12 @@ type SchemaError =
                     match stmt with
                     | Some(s) -> Some x, (sprintf "Namespace already registered by module \"%A\" (%A)." y.Name s.Position)
                     | None -> Some x, (sprintf "Namespace already registered by module \"%A\"." y.Name)
+                | CannotFindModule(x, y) ->
+                    None, (sprintf "Unable to find imported module \"%s\". Searched paths: %s" x (String.Join(Environment.NewLine, y)))
+                | CannotOpenModule(x, y) ->
+                    None, (sprintf "Unable to open module \"%s\": %s" x y)
+                | CannotFindModuleRevision(x, y) ->
+                    None, (sprintf "Unable to find imported module \"%s\" with revision %s. Searched paths: %s" x (y.ToString("yyyy-MM-dd")) (String.Join(Environment.NewLine, y)))
                 | ShadowedType(x, y) ->
                     let stmt: Statement option = y.OriginalStatement
                     match stmt with
@@ -678,8 +687,7 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
     member val Organization: string = null with get, set
     member val Description: string = null with get, set
     member val Reference: string = null with get, set
-
-    member val Revisions = ResizeArray<YANGModuleRevision>()
+    member val Revision: YANGModuleRevision option = None with get, set
 
     member val DataNodes = ResizeArray<YANGDataNode>()
 

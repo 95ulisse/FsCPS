@@ -8,10 +8,20 @@ type Result<'TOk, 'TError> =
 
 module internal Result =
 
+    let fromOption opt =
+        match opt with
+        | Some x -> Ok x
+        | None -> Error ()
+
     let bind f res =
         match res with
         | Ok x -> f x
         | Error x -> Error x
+
+    let bindError f res =
+        match res with
+        | Ok x -> Ok x
+        | Error x -> f x
 
     let map f res =
         match res with
@@ -23,7 +33,7 @@ let internal (>>=) res f =
     Result.bind f res
 
 
-let inline internal isNull value =
+let internal isNull value =
     match value with
     | null -> true
     | _ -> false

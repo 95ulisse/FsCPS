@@ -3,7 +3,8 @@ namespace FsCPS.Tests.Yang
 open System
 open FParsec
 open Xunit
-open FsCPS.Yang.Statements
+open FsCPS.Yang
+open FsCPS.Yang.StatementParsers
 open FsCPS.Tests.Utils
 
 module Identifiers =

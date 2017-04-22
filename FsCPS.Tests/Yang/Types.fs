@@ -1,14 +1,16 @@
 ﻿namespace FsCPS.Tests.Yang
 
 open System
+open System.Collections.Generic
 open System.Globalization
 open Xunit
 open Xunit.Sdk
 open FsCheck
 open FsCheck.Xunit
+open FsCPS
 open FsCPS.Yang
-open FsCPS.Yang.Statements
 open FsCPS.Yang.Model
+open FsCPS.Tests
 open FsCPS.Tests.Utils
 
 // Integer used to represent the value of the `fraction-digits` property
@@ -147,21 +149,11 @@ module Decimal64 =
 
 
 module Enumeration =
-    open System.Collections.Generic
-
-    let createModule inner =
-        YANGParser().ParseModule("""
-            module test {
-                namespace "http://example.com/test-module";
-                prefix test;
-                """ + inner + """
-            }
-        """)
 
     [<Fact>]
     let ``Enumerations must have distinct names`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a;
@@ -177,7 +169,7 @@ module Enumeration =
     [<Fact>]
     let ``Enumerations must have distinct values`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a { value 1; }
@@ -193,7 +185,7 @@ module Enumeration =
     [<Fact>]
     let ``Values are computed automatically and start from 0`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a;
@@ -222,7 +214,7 @@ module Enumeration =
     [<Fact>]
     let ``Values are continued automatically if only some of them are present`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a { value -10; }
@@ -254,7 +246,7 @@ module Enumeration =
     [<Fact>]
     let ``Derived enumerations must have distinct names from base type`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a;
@@ -275,7 +267,7 @@ module Enumeration =
     [<Fact>]
     let ``Derived enumerations must have distinct values from base type`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a { value 1; }
@@ -296,7 +288,7 @@ module Enumeration =
     [<Fact>]
     let ``Derived enumeration values are continued from the base type`` () =
         let m =
-            createModule """
+            Utils.CreateModule """
                 typedef my-type {
                     type enumeration {
                         enum a { value 10; }
