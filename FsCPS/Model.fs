@@ -84,21 +84,8 @@ type CPSTransaction() =
     let setObjects = ResizeArray<CPSObject>()
     let deleteObjects = ResizeArray<CPSObject>()
 
-    member this.Create(o: CPSObject) =
-        createObjects.Add(o)
+    static let addObjects objs cb storeHandle context =
 
-    member this.Set(o: CPSObject) =
-        setObjects.Add(o)
-
-    member this.Delete(o: CPSObject) =
-        deleteObjects.Add(o)
-
-    member this.Commit() =
-
-        // These references are used for cleanup
-        let mutable transaction = None
-        let mutable handles = []
-        
         let addAttr (obj: NativeObject) (attr: CPSAttribute) =
             
             // Convert the path to an attribute id
@@ -110,7 +97,7 @@ type CPSTransaction() =
             )
 
             // Store the GC handle in the list
-            >>= (fun h -> handles <- h :: handles; Ok())
+            >>= (fun h -> storeHandle h; Ok())
 
         let objToNative (obj: CPSObject) =
 
@@ -127,17 +114,41 @@ type CPSTransaction() =
             // Sets the object's key
             >>= NativeMethods.SetObjectKey obj.Key.Qualifier (obj.Key.Path.ToString())
 
-        let addObjects objs op trans =
+            // Prints the object key for debug
+            |>> (fun nativeObject ->
+                NativeMethods.PrintObjectKey nativeObject
+                |>> printf "Key mapping: %s -> %s\n" (obj.Key.Path.ToString())
+                |> ignore
+                nativeObject
+            )
 
-            // Apply the operator to all the objects in the sequence
-            objs
-            |> foldResult (fun o ->
-                objToNative o
-                >>= op trans
-            ) (Ok())
+        // Apply the operator to all the objects in the sequence
+        objs
+        |> foldResult (fun o ->
+            objToNative o
+            >>= cb context
+        ) (Ok())
 
-            // Return the transaction for chaining
-            >>= (fun () -> Ok(trans))
+        // Return the context for chaining
+        |>> (fun () -> context)
+
+    member this.Create(o: CPSObject) =
+        createObjects.Add(o)
+
+    member this.Set(o: CPSObject) =
+        setObjects.Add(o)
+
+    member this.Delete(o: CPSObject) =
+        deleteObjects.Add(o)
+
+    member this.Commit() =
+
+        // These references are used for cleanup
+        let mutable transaction = None
+        let mutable handles = []
+
+        let storeHandle h =
+            handles <- h :: handles
 
         let mutable result =
 
@@ -146,9 +157,9 @@ type CPSTransaction() =
             >>= (fun t -> transaction <- Some t; Ok(t))
 
             // Then we add the objects to it
-            >>= addObjects createObjects NativeMethods.TransactionAddCreate
-            >>= addObjects setObjects NativeMethods.TransactionAddSet
-            >>= addObjects deleteObjects NativeMethods.TransactionAddDelete
+            >>= addObjects createObjects NativeMethods.TransactionAddCreate storeHandle
+            >>= addObjects setObjects NativeMethods.TransactionAddSet storeHandle
+            >>= addObjects deleteObjects NativeMethods.TransactionAddDelete storeHandle
 
             // And commit!
             >>= NativeMethods.TransactionCommit
@@ -159,6 +170,37 @@ type CPSTransaction() =
         // release native memory.
         if transaction.IsSome then
             result <- NativeMethods.DestroyTransaction(transaction.Value)
+        handles |> List.iter (fun h -> h.Free())
+
+        result
+
+    static member Get(filters: seq<#CPSObject>) =
+        
+        // These references are used for cleanup
+        let mutable req = None
+        let mutable handles = []
+
+        let storeHandle h =
+            handles <- h :: handles
+
+        let mutable result =
+
+            // Creates a new request with the given filters
+            NativeMethods.CreateGetRequest()
+            >>= (fun t -> req <- Some t; Ok(t))
+            >>= addObjects filters NativeMethods.GetRequestAddObject storeHandle
+
+            // And sends the request
+            >>= NativeMethods.GetRequestSend
+
+        // Destroy the transaction and release the GCHandles.
+        // This will also free all the native objects and the attributes we created earlier.
+        // Note that we destroy the transaction in every case, both error and success to
+        // release native memory.
+        if req.IsSome then
+            match NativeMethods.DestroyGetRequest(req.Value) with
+            | Ok() -> ()
+            | Error e -> result <- Error e
         handles |> List.iter (fun h -> h.Free())
 
         result

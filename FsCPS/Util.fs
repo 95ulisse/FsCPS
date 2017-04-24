@@ -33,6 +33,10 @@ let internal (>>=) res f =
     Result.bind f res
 
 
+let internal (|>>) res f =
+    Result.map f res
+
+
 let internal isNull value =
     match value with
     | null -> true

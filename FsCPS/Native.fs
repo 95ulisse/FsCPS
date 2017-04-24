@@ -122,6 +122,9 @@ module internal NativeMethods =
         [<DllImport(objectLibrary, EntryPoint = "cps_api_key_from_attr_with_qual")>]
         extern bool cps_api_key_from_attr_with_qual_ptr(nativeint key, NativeAttrID aid, CPSQualifier qual)
 
+        [<DllImport(objectLibrary, EntryPoint = "_Z21cps_dict_find_by_namePKc", CharSet = CharSet.Ansi)>]
+        extern nativeint cps_dict_find_by_name(string path)
+
         [<DllImport(objectLibrary, CharSet = CharSet.Ansi)>]
         extern bool cps_class_string_to_key(string name, nativeint attrIds, unativeint& maxSize)
 
@@ -146,6 +149,9 @@ module internal NativeMethods =
 
         [<DllImport(objectLibrary)>]
         extern NativeObject cps_api_object_list_get(NativeObjectList list, unativeint i)
+
+        [<DllImport(objectLibrary)>]
+        extern bool cps_api_object_list_append(NativeObjectList list, NativeObject obj)
 
         [<DllImport(objectLibrary)>]
         extern NativeObjectAttr cps_api_object_attr_get(NativeObject obj, NativeAttrID aid)
@@ -196,27 +202,43 @@ module internal NativeMethods =
     do
         Extern.cps_api_class_map_init()
 
+    /// Returns a string representation of a CPS error code.
+    let ReturnValueToString ret =
+        match ret with
+        | 0 -> "OK"
+        | 1 -> "GENERIC_ERROR"
+        | 2 -> "NO_SERVICE"
+        | 3 -> "SERVICE_CONNECT_FAIL"
+        | 4 -> "INTERNAL_FAILURE"
+        | 5 -> "TIMEOUT"
+        | _ -> "UNKNOWN_ERROR"
+
     /// Returns the string representation of the fiven string.
     let PrintKey key =
         let sb = StringBuilder(1024)
         Extern.cps_api_key_print(key, sb, 1024un) |> ignore
         sb.ToString()
 
+    /// Prints the key of the given object.
+    let PrintObjectKey obj =
+        let k = Extern.cps_api_object_key(obj)
+        if k = IntPtr.Zero then
+            Error "Could not get object's key."
+        else
+            Ok (PrintKey k)
+
     /// Converts a human-readable string path to an Attribute ID.
     let AttrIdFromPath path =
-        
-        // Alloc an array to hold the results
-        let mutable len = 64un
-        let arr = Array.zeroCreate<NativeAttrID> 64
-        let handle = GCHandle.Alloc(arr, GCHandleType.Pinned)
-
-        let result =  Extern.cps_class_string_to_key(path, handle.AddrOfPinnedObject(), &len)
-        handle.Free()
-
-        if result then
-            Ok arr.[int len - 1]
-        else
+        let ptr = Extern.cps_dict_find_by_name(path)
+        if ptr = IntPtr.Zero then
             Error ("Cannot find path " + path)
+        else
+            // The offset 40 was found by trial and error.
+            // The pointer returned by `cps_dict_find_by_name` points to an internal C++ struct
+            // which we don't know. This is now 40, but can change without notice.
+            // This is horrible. There must be a better way. There must be.
+            let id = uint64 (Marshal.ReadInt64(ptr, 40))
+            Ok id
 
     /// Sets an object's key.
     let SetObjectKey qual path obj =
@@ -262,50 +284,90 @@ module internal NativeMethods =
         Extern.cps_api_object_attr_delete(obj, aid)
         Ok()
 
+    /// Creates a new CPS Get request.
+    let CreateGetRequest () =
+        let mutable req = NativeGetParams()
+        let ret = Extern.cps_api_get_request_init(&req)
+        if ret = 0 then
+            Ok req
+        else
+            Error (sprintf "Cannot inizialize native get request (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Destroys the Get request.
+    let DestroyGetRequest (req: NativeGetParams) =
+        let mutable r = req
+        let ret = Extern.cps_api_get_request_close(&r)
+        if ret = 0 then
+            Ok()
+        else
+            Error (sprintf "Error freeing get request (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Adds an object as a filter to the given Get request.
+    let GetRequestAddObject (req: NativeGetParams) (obj: NativeObject) =
+        if Extern.cps_api_object_list_append(req.filters, obj) then
+            Ok()
+        else
+            Error "Error adding object to get request."
+
+    // Sends the given get request.
+    let GetRequestSend (req: NativeGetParams) =
+        let mutable r = req
+        let ret = Extern.cps_api_get(&r)
+        if ret = 0 then
+            Ok()
+        else
+            Error (sprintf "Error sending get request (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
     /// Creates a new CPS transaction.
     let CreateTransaction () =
         let mutable trans = NativeTransactionParams()
-        if Extern.cps_api_transaction_init(&trans) = 0 then
+        let ret = Extern.cps_api_transaction_init(&trans)
+        if ret = 0 then
             Ok trans
         else
-            Error "Memory allocation error."
+            Error (sprintf "Cannot initialize native transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
     /// Releases the resources of a native CPS transaction.
     let DestroyTransaction (trans: NativeTransactionParams) =
         let mutable t = trans
-        if Extern.cps_api_transaction_close(&t) = 0 then
+        let ret = Extern.cps_api_transaction_close(&t)
+        if ret = 0 then
             Ok()
         else
-            Error "Error freeing transaction."
+            Error (sprintf "Error freeing transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
     /// Adds a `create` operation to a transaction.
     let TransactionAddCreate (trans: NativeTransactionParams) (obj: NativeObject) =
         let mutable t = trans
-        if Extern.cps_api_create(&t, obj) = 0 then
+        let ret = Extern.cps_api_create(&t, obj)
+        if ret = 0 then
             Ok()
         else
-            Error "Error adding operation to transaction."
+            Error (sprintf "Error adding operation to transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
     /// Adds a `set` operation to a transaction.
     let TransactionAddSet (trans: NativeTransactionParams) (obj: NativeObject) =
         let mutable t = trans
-        if Extern.cps_api_set(&t, obj) = 0 then
+        let ret = Extern.cps_api_set(&t, obj)
+        if ret = 0 then
             Ok()
         else
-            Error "Error adding operation to transaction."
+            Error (sprintf "Error adding operation to transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
     /// Adds a `delete` operation to a transaction.
     let TransactionAddDelete (trans: NativeTransactionParams) (obj: NativeObject) =
         let mutable t = trans
-        if Extern.cps_api_delete(&t, obj) = 0 then
+        let ret = Extern.cps_api_delete(&t, obj)
+        if ret = 0 then
             Ok()
         else
-            Error "Error adding operation to transaction."
+            Error (sprintf "Error adding operation to transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
     /// Commits a transaction.
     let TransactionCommit (trans: NativeTransactionParams) =
         let mutable t = trans
-        if Extern.cps_api_commit(&t) = 0 then
+        let ret = Extern.cps_api_commit(&t)
+        if ret = 0 then
             Ok()
         else
-            Error "Error committing transaction."
+            Error (sprintf "Error committing transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
