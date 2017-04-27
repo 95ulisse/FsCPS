@@ -28,6 +28,11 @@ module internal Result =
         | Ok x -> Ok (f x)
         | Error x -> Error x
 
+    let okOrThrow f res =
+        match res with
+        | Ok x -> x
+        | Error e -> f e
+
 
 let internal (>>=) res f =
     Result.bind f res
@@ -43,9 +48,9 @@ let internal isNull value =
     | _ -> false
 
 
-let inline internal foldResult f initialState xs =
+let internal foldResult f initialState xs =
     xs |> Seq.fold (fun state x ->
         match state with
-        | Ok _ -> f x
+        | Ok s -> f s x
         | Error _ -> state
-    ) initialState
+    ) (Ok(initialState))

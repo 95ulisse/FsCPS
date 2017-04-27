@@ -33,43 +33,59 @@ namespace FsCPS.Native
 #nowarn "9" // Unverifiable IL
 
 open System
+open System.Net
 open System.Runtime.InteropServices
 open System.Text
 open FsCPS
 
 
 // Definition of native types.
-// Most of them are just structures with a single field of type nativeint:
-// this is just to mirror the fact the most of the types in the C library
-// are just typedefs to void*. We could have used a simple nativeint anywhere,
-// but distinct types help us keep a little bit of type safety.
+// Note that complex structures are modeled as classes, not structs:
+// the native APIs always expect a pointer, so using a reference type helps
+// avoiding manual pinning and continuous copies when these types are passed
+// in the managed code.
 
-[<Struct>]
+type internal NativeKeyStorage private (addr: nativeint) =
+
+    interface IDisposable with
+        member this.Dispose() = this.Dispose()
+
+    new () as this =
+        new NativeKeyStorage(Marshal.AllocHGlobal(256 + 8))
+        then
+            Marshal.WriteInt64(this.Address, 256, 42L)
+
+    member val Address = addr
+
+    member this.Dispose() =
+        this.CheckCanary()
+        Marshal.FreeHGlobal(addr)
+
+    member this.CheckCanary() =
+        let canary = Marshal.ReadInt64(addr, 256)
+        if canary <> 42L then
+            invalidOp (sprintf "CANARY: %d" canary)
+
+
+type internal NativeObject = nativeint
+type internal NativeObjectList = nativeint
+type internal NativeAttr = nativeint
+type internal NativeAttrID = uint64
+
+
+[<Class>]
+[<AllowNullLiteral>]
 [<StructLayout(LayoutKind.Sequential)>]
-type internal NativeKey =
-    [<MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)>]
-    val mutable raw: uint8[]
+type internal NativeObjectIterator =
+    val mutable len: unativeint
+    val mutable attr: NativeAttr
+
+    new () =
+        { len = 0un; attr = 0n }
 
 
-[<Struct>]
-[<StructLayout(LayoutKind.Sequential)>]
-type internal NativeObject =
-    val mutable pointer: nativeint
-
-
-[<Struct>]
-[<StructLayout(LayoutKind.Sequential)>]
-type internal NativeObjectAttr =
-    val mutable pointer: nativeint
-
-
-[<Struct>]
-[<StructLayout(LayoutKind.Sequential)>]
-type internal NativeObjectList =
-    val mutable pointer: nativeint
-
-
-[<Struct>]
+[<Class>]
+[<AllowNullLiteral>]
 [<StructLayout(LayoutKind.Sequential)>]
 type internal NativeGetParams =
     val mutable keys: nativeint // Pointer to array of Key
@@ -78,17 +94,21 @@ type internal NativeGetParams =
     val mutable filters: NativeObjectList
     val mutable timeout: unativeint
 
+    new () =
+        { keys = 0n; key_count = 0un; list = 0n; filters = 0n; timeout = 0un }
 
-[<Struct>]
+
+[<Class>]
+[<AllowNullLiteral>]
 [<StructLayout(LayoutKind.Sequential)>]
 type internal NativeTransactionParams =
     val mutable change_list: NativeObjectList
     val mutable prev: NativeObjectList
     val mutable timeout: unativeint
 
+    new () =
+        { change_list = 0n; prev = 0n; timeout = 0un }
 
-// Other aliases
-type internal NativeAttrID = uint64
 
 
 /// Definitions of all the native methods needed by FsCPS.
@@ -98,43 +118,30 @@ module internal NativeMethods =
     module private Extern =
 
         [<Literal>]
-        let objectLibrary = "libcps-api-common.so"
+        let cpsLibrary = "libcps-api-common.so"
 
         // Library initialization
 
-        [<DllImport(objectLibrary)>]
+        [<DllImport(cpsLibrary)>]
         extern void cps_api_class_map_init()
 
-        // Keys, objects, attributes
+        // Objects
 
-        [<DllImport(objectLibrary, CharSet = CharSet.Ansi)>]
+        [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
         extern NativeObject cps_api_object_create_int(string desc, uint32 line, string name)
 
-        [<DllImport(objectLibrary)>]
+        [<DllImport(cpsLibrary)>]
         extern void cps_api_object_delete(NativeObject obj)
 
-        [<DllImport(objectLibrary)>]
-        extern nativeint (* NativeKey* *) cps_api_object_key(NativeObject obj)
+        [<DllImport(cpsLibrary)>]
+        extern nativeint cps_api_object_key(NativeObject obj)
 
-        [<DllImport(objectLibrary)>]
-        extern bool cps_api_key_from_attr_with_qual(NativeKey& key, NativeAttrID aid, CPSQualifier qual)
+        [<DllImport(cpsLibrary)>]
+        extern void cps_api_object_set_key(NativeObject obj, nativeint key)
 
-        [<DllImport(objectLibrary, EntryPoint = "cps_api_key_from_attr_with_qual")>]
-        extern bool cps_api_key_from_attr_with_qual_ptr(nativeint key, NativeAttrID aid, CPSQualifier qual)
+        // Object attributes
 
-        [<DllImport(objectLibrary, EntryPoint = "_Z21cps_dict_find_by_namePKc", CharSet = CharSet.Ansi)>]
-        extern nativeint cps_dict_find_by_name(string path)
-
-        [<DllImport(objectLibrary, CharSet = CharSet.Ansi)>]
-        extern bool cps_class_string_to_key(string name, nativeint attrIds, unativeint& maxSize)
-
-        [<DllImport(objectLibrary, CharSet = CharSet.Ansi)>]
-        extern nativeint cps_api_key_print(nativeint key, StringBuilder buffer, unativeint len)
-
-        [<DllImport(objectLibrary)>]
-        extern bool cps_api_set_key_data(NativeObject obj, NativeAttrID id, CPSAttributeType atype, nativeint data, unativeint len)
-
-        [<DllImport(objectLibrary)>]
+        [<DllImport(cpsLibrary)>]
         extern bool cps_api_object_e_add(
             NativeObject obj,
             [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2s)>] NativeAttrID[] aid,
@@ -144,58 +151,88 @@ module internal NativeMethods =
             unativeint len
         )
 
-        [<DllImport(objectLibrary)>]
+        [<DllImport(cpsLibrary)>]
         extern void cps_api_object_attr_delete(NativeObject obj, NativeAttrID aid)
 
-        [<DllImport(objectLibrary)>]
+        [<DllImport(cpsLibrary)>]
+        extern NativeAttrID cps_api_object_attr_id(NativeAttr attr)
+
+        [<DllImport(cpsLibrary)>]
+        extern nativeint cps_api_object_attr_data_bin(NativeAttr attr)
+
+        [<DllImport(cpsLibrary)>]
+        extern unativeint cps_api_object_attr_len(NativeAttr attr)
+        
+        [<DllImport(cpsLibrary)>]
+        extern NativeAttr cps_api_object_attr_get(NativeObject obj, NativeAttrID aid)
+
+        [<DllImport(cpsLibrary)>]
+        extern void cps_api_object_it_begin(NativeObject obj, [<In; Out>] NativeObjectIterator it)
+
+        // Keys
+
+        [<DllImport(cpsLibrary)>]
+        extern bool cps_api_key_from_attr_with_qual(nativeint key, NativeAttrID aid, CPSQualifier qual)
+
+        [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
+        extern bool cps_api_key_from_string(nativeint key, [<MarshalAs(UnmanagedType.LPStr)>] string str)
+
+        [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
+        extern nativeint cps_api_key_print(nativeint key, [<MarshalAs(UnmanagedType.LPStr)>] StringBuilder buffer, unativeint len)
+
+        // Attribute ID to name mapping
+
+        [<DllImport(cpsLibrary, EntryPoint = "_Z21cps_dict_find_by_namePKc", CharSet = CharSet.Ansi)>]
+        extern nativeint cps_dict_find_by_name(string path)
+
+        [<DllImport(cpsLibrary)>]
+        extern string cps_attr_id_to_name(NativeAttrID id)
+
+        // Object lists
+
+        [<DllImport(cpsLibrary)>]
+        extern NativeObjectList cps_api_object_list_create()
+
+        [<DllImport(cpsLibrary)>]
+        extern void cps_api_object_list_destroy(NativeObjectList list, bool delete_objects)
+
+        [<DllImport(cpsLibrary)>]
         extern NativeObject cps_api_object_list_get(NativeObjectList list, unativeint i)
 
-        [<DllImport(objectLibrary)>]
+        [<DllImport(cpsLibrary)>]
         extern bool cps_api_object_list_append(NativeObjectList list, NativeObject obj)
 
-        [<DllImport(objectLibrary)>]
-        extern NativeObjectAttr cps_api_object_attr_get(NativeObject obj, NativeAttrID aid)
-
-        [<DllImport(objectLibrary)>]
-        extern uint16 cps_api_object_attr_data_u16(NativeObjectAttr attr)
-
-        [<DllImport(objectLibrary)>]
-        extern uint32 cps_api_object_attr_data_u32(NativeObjectAttr attr)
-
-        [<DllImport(objectLibrary)>]
-        extern uint64 cps_api_object_attr_data_u64(NativeObjectAttr attr)
-
-        [<DllImport(objectLibrary)>]
-        extern nativeint cps_api_object_attr_data_bin(NativeObjectAttr attr)
+        [<DllImport(cpsLibrary)>]
+        extern unativeint cps_api_object_list_size(NativeObjectList list)
 
         // Transactions
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_transaction_init(NativeTransactionParams& trans)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_transaction_init([<In; Out>] NativeTransactionParams trans)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_transaction_close(NativeTransactionParams& trans)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_transaction_close([<In; Out>] NativeTransactionParams trans)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_get(NativeGetParams& req)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_get([<In; Out>] NativeGetParams req)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_create(NativeTransactionParams& trans, NativeObject obj)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_create([<In; Out>] NativeTransactionParams trans, NativeObject obj)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_set(NativeTransactionParams& trans, NativeObject obj)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_set([<In; Out>] NativeTransactionParams trans, NativeObject obj)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_delete(NativeTransactionParams& trans, NativeObject obj)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_delete([<In; Out>] NativeTransactionParams trans, NativeObject obj)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_get_request_init(NativeGetParams& req)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_get_request_init([<In; Out>] NativeGetParams req)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_get_request_close(NativeGetParams& req)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_get_request_close([<In; Out>] NativeGetParams req)
 
-        [<DllImport(objectLibrary)>]
-        extern int cps_api_commit(NativeTransactionParams& trans)
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_commit([<In; Out>] NativeTransactionParams trans)
 
 
     // Initializes the native library as soon as the module is loaded.
@@ -213,19 +250,20 @@ module internal NativeMethods =
         | 5 -> "TIMEOUT"
         | _ -> "UNKNOWN_ERROR"
 
-    /// Returns the string representation of the fiven string.
+    /// Returns the string representation of the given string.
     let PrintKey key =
         let sb = StringBuilder(1024)
         Extern.cps_api_key_print(key, sb, 1024un) |> ignore
         sb.ToString()
 
-    /// Prints the key of the given object.
-    let PrintObjectKey obj =
-        let k = Extern.cps_api_object_key(obj)
-        if k = IntPtr.Zero then
-            Error "Could not get object's key."
+    /// Parses the given string representation of a key into an actual key.
+    let ParseKey str =
+        let k = new NativeKeyStorage()
+        if Extern.cps_api_key_from_string(k.Address, str) then
+            k.CheckCanary()
+            Ok k
         else
-            Ok (PrintKey k)
+            Error "Could not set parse key."
 
     /// Converts a human-readable string path to an Attribute ID.
     let AttrIdFromPath path =
@@ -240,24 +278,44 @@ module internal NativeMethods =
             let id = uint64 (Marshal.ReadInt64(ptr, 40))
             Ok id
 
-    /// Sets an object's key.
-    let SetObjectKey qual path obj =
+    /// Converts an attribute ID to a path name.
+    let AttrIdToPath id =
+        Extern.cps_attr_id_to_name(id)
+
+    /// Creates a native key out of a qualifier and a path.
+    let CreateKey qual path =
+        AttrIdFromPath path
+        >>= (fun attrId ->
+            let k = new NativeKeyStorage()
+            if Extern.cps_api_key_from_attr_with_qual(k.Address, attrId, qual) then
+                k.CheckCanary()
+                Ok k
+            else
+                Error "Could not set object's key."
+        )
+
+    /// Extracts the key of an object.
+    let GetObjectKey obj =
         let k = Extern.cps_api_object_key(obj)
         if k = IntPtr.Zero then
             Error "Could not get object's key."
         else
-            AttrIdFromPath path
-            >>= (fun attrId ->
-                if Extern.cps_api_key_from_attr_with_qual_ptr(k, attrId, qual) then
-                    Ok obj
-                else
-                    Error "Could not set object's key."
-            )
+            Ok k
+
+    /// Sets an object's key.
+    let SetObjectKey key obj =
+        GetObjectKey obj
+        >>= (fun k ->
+            if Extern.cps_api_key_from_string(k, key) then
+                Ok obj
+            else
+                Error "Could not parse key."
+        )
 
     /// Creates a new CPS object.
     let CreateObject () =
         let obj = Extern.cps_api_object_create_int("", 0u, "")
-        if obj.pointer = IntPtr.Zero then
+        if obj = IntPtr.Zero then
             Error "Cannot create native CPS object"
         else
             Ok obj
@@ -265,6 +323,50 @@ module internal NativeMethods =
     /// Frees the resources of a native CPS object.
     let DestroyObject (obj: NativeObject) =
         Extern.cps_api_object_delete(obj)
+
+    /// Checks if an iterator is valid or not.
+    let IteratorIsValid (it: NativeObjectIterator) =
+        if it.attr = IntPtr.Zero then
+            false
+        else
+            let len = IPAddress.NetworkToHostOrder(Marshal.ReadInt64(it.attr, sizeof<uint64>))
+            let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
+            it.len >= totalLen
+
+    /// Advances the given iterator.
+    let IteratorNext (it: NativeObjectIterator) =
+        if it.attr <> IntPtr.Zero then
+            let len = IPAddress.NetworkToHostOrder(Marshal.ReadInt64(it.attr, sizeof<uint64>))
+            let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
+            if it.len < totalLen then
+                it.attr <- IntPtr.Zero
+            else
+                it.len <- it.len - totalLen
+                it.attr <- it.attr + nativeint totalLen
+
+    /// Returns a sequence that iterates over all the attributes in the given object.
+    let IterateAttributes (obj: NativeObject) =
+        seq {
+            // Creates an iterator
+            let it = NativeObjectIterator()
+            let handle = GCHandle.Alloc(it, GCHandleType.Pinned)
+            Extern.cps_api_object_it_begin(obj, it)
+
+            // Walks the iterator
+            while IteratorIsValid it do
+                yield Extern.cps_api_object_attr_id(it.attr)
+                IteratorNext(it)
+
+            handle.Free()
+        }
+
+    /// Returns a sequence that iterates over all the native objects in the given list.
+    let IterateObjectList (l: NativeObjectList) =
+        seq {
+            let len = Extern.cps_api_object_list_size(l)
+            for i = 0un to len - 1un do
+                yield Extern.cps_api_object_list_get(l, i)
+        }
 
     /// Adds a binary attribute to a native CPS object.
     /// On success, returns the handle to the native memory added to the native object.
@@ -279,15 +381,46 @@ module internal NativeMethods =
         else
             Error "Cannot add attribute to native object."
 
+    /// Returns a copy of the attribute store in the given object with the given id.
+    let GetAttribute (obj: NativeObject) (aid: NativeAttrID) =
+        let attr = Extern.cps_api_object_attr_get(obj, aid)
+        if attr = IntPtr.Zero then
+            Error (sprintf "Could not find attribute with id %d." aid)
+        else
+            let len = int (Extern.cps_api_object_attr_len(attr))
+            let arr = Array.zeroCreate<byte> len
+            Marshal.Copy(Extern.cps_api_object_attr_data_bin(attr), arr, 0, len)
+            Ok(arr)
+
     /// Removes the attribute from the given object.
     let RemoveAttribute (obj: NativeObject) (aid: NativeAttrID) =
         Extern.cps_api_object_attr_delete(obj, aid)
         Ok()
 
+    /// Creates a new object list.
+    let CreateObjectList () =
+        let list = Extern.cps_api_object_list_create()
+        if list <> IntPtr.Zero then
+            Ok list
+        else
+            Error "Cannot create native object list."
+
+    /// Destroys an object list.
+    let DestroyObjectList (destroyObjects: bool) (list: NativeObjectList) =
+        Extern.cps_api_object_list_destroy(list, destroyObjects)
+        Ok()
+
+    /// Appends an element to an object list.
+    let AppendObjectToList list obj =
+        if Extern.cps_api_object_list_append(list, obj) then
+            Ok list
+        else
+            Error "Cannot append native object to list."
+
     /// Creates a new CPS Get request.
     let CreateGetRequest () =
-        let mutable req = NativeGetParams()
-        let ret = Extern.cps_api_get_request_init(&req)
+        let req = NativeGetParams()
+        let ret = Extern.cps_api_get_request_init(req)
         if ret = 0 then
             Ok req
         else
@@ -295,24 +428,15 @@ module internal NativeMethods =
 
     /// Destroys the Get request.
     let DestroyGetRequest (req: NativeGetParams) =
-        let mutable r = req
-        let ret = Extern.cps_api_get_request_close(&r)
+        let ret = Extern.cps_api_get_request_close(req)
         if ret = 0 then
             Ok()
         else
             Error (sprintf "Error freeing get request (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
-    /// Adds an object as a filter to the given Get request.
-    let GetRequestAddObject (req: NativeGetParams) (obj: NativeObject) =
-        if Extern.cps_api_object_list_append(req.filters, obj) then
-            Ok()
-        else
-            Error "Error adding object to get request."
-
     // Sends the given get request.
     let GetRequestSend (req: NativeGetParams) =
-        let mutable r = req
-        let ret = Extern.cps_api_get(&r)
+        let ret = Extern.cps_api_get(req)
         if ret = 0 then
             Ok()
         else
@@ -320,8 +444,8 @@ module internal NativeMethods =
 
     /// Creates a new CPS transaction.
     let CreateTransaction () =
-        let mutable trans = NativeTransactionParams()
-        let ret = Extern.cps_api_transaction_init(&trans)
+        let trans = NativeTransactionParams()
+        let ret = Extern.cps_api_transaction_init(trans)
         if ret = 0 then
             Ok trans
         else
@@ -329,8 +453,7 @@ module internal NativeMethods =
 
     /// Releases the resources of a native CPS transaction.
     let DestroyTransaction (trans: NativeTransactionParams) =
-        let mutable t = trans
-        let ret = Extern.cps_api_transaction_close(&t)
+        let ret = Extern.cps_api_transaction_close(trans)
         if ret = 0 then
             Ok()
         else
@@ -338,8 +461,7 @@ module internal NativeMethods =
 
     /// Adds a `create` operation to a transaction.
     let TransactionAddCreate (trans: NativeTransactionParams) (obj: NativeObject) =
-        let mutable t = trans
-        let ret = Extern.cps_api_create(&t, obj)
+        let ret = Extern.cps_api_create(trans, obj)
         if ret = 0 then
             Ok()
         else
@@ -347,8 +469,7 @@ module internal NativeMethods =
 
     /// Adds a `set` operation to a transaction.
     let TransactionAddSet (trans: NativeTransactionParams) (obj: NativeObject) =
-        let mutable t = trans
-        let ret = Extern.cps_api_set(&t, obj)
+        let ret = Extern.cps_api_set(trans, obj)
         if ret = 0 then
             Ok()
         else
@@ -356,8 +477,7 @@ module internal NativeMethods =
 
     /// Adds a `delete` operation to a transaction.
     let TransactionAddDelete (trans: NativeTransactionParams) (obj: NativeObject) =
-        let mutable t = trans
-        let ret = Extern.cps_api_delete(&t, obj)
+        let ret = Extern.cps_api_delete(trans, obj)
         if ret = 0 then
             Ok()
         else
@@ -365,8 +485,7 @@ module internal NativeMethods =
 
     /// Commits a transaction.
     let TransactionCommit (trans: NativeTransactionParams) =
-        let mutable t = trans
-        let ret = Extern.cps_api_commit(&t)
+        let ret = Extern.cps_api_commit(trans)
         if ret = 0 then
             Ok()
         else
