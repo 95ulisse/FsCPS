@@ -3,10 +3,6 @@
 open System
 
 
-type CPSNativeException(msg: string) =
-    inherit Exception(msg)
-
-
 type CPSQualifier =
     | Target = 1
     | Observed = 2
@@ -19,6 +15,13 @@ type CPSAttributeType =
     | UInt32 = 1
     | UInt64 = 2
     | Binary = 3
+
+
+type CPSOperationType =
+    | Delete = 1
+    | Create = 2
+    | Set = 3
+    | Action = 4
 
 
 
@@ -110,6 +113,23 @@ type internal NativeTransactionParams =
         { change_list = 0n; prev = 0n; timeout = 0un }
 
 
+type internal NativeServerCallback = delegate of (nativeint * nativeint * unativeint) -> int
+
+
+[<Struct>]
+[<StructLayout(LayoutKind.Sequential)>]
+type internal NativeServerRegistrationRequest =
+    val mutable handle: nativeint
+    val mutable context: nativeint
+    [<MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)>]
+    val mutable key: byte[]
+    [<MarshalAs(UnmanagedType.FunctionPtr)>]
+    val mutable read_function: NativeServerCallback
+    [<MarshalAs(UnmanagedType.FunctionPtr)>]
+    val mutable write_function: NativeServerCallback
+    [<MarshalAs(UnmanagedType.FunctionPtr)>]
+    val mutable rollback_function: NativeServerCallback
+
 
 /// Definitions of all the native methods needed by FsCPS.
 module internal NativeMethods =
@@ -134,6 +154,9 @@ module internal NativeMethods =
         extern void cps_api_object_delete(NativeObject obj)
 
         [<DllImport(cpsLibrary)>]
+        extern bool cps_api_object_clone(NativeObject dest, NativeObject src)
+
+        [<DllImport(cpsLibrary)>]
         extern nativeint cps_api_object_key(NativeObject obj)
 
         [<DllImport(cpsLibrary)>]
@@ -147,7 +170,7 @@ module internal NativeMethods =
             [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2s)>] NativeAttrID[] aid,
             unativeint id_size,
             CPSAttributeType atype,
-            nativeint data,
+            [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 5s)>] byte[] data,
             unativeint len
         )
 
@@ -234,6 +257,17 @@ module internal NativeMethods =
         [<DllImport(cpsLibrary)>]
         extern int cps_api_commit([<In; Out>] NativeTransactionParams trans)
 
+        // API for servers
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_operation_subsystem_init(nativeint& handle, int threads)
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_register(NativeServerRegistrationRequest& req)
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_object_type_operation(nativeint key)
+
 
     // Initializes the native library as soon as the module is loaded.
     do
@@ -312,6 +346,14 @@ module internal NativeMethods =
                 Error "Could not parse key."
         )
 
+    /// Extracts the operation type from a key.
+    let GetOperationFromKey key =
+        let ret = Extern.cps_api_object_type_operation(key)
+        if ret = 0 then
+            Error "Cannot extract operation type from key."
+        else
+            Ok (enum<CPSOperationType> ret)
+
     /// Creates a new CPS object.
     let CreateObject () =
         let obj = Extern.cps_api_object_create_int("", 0u, "")
@@ -323,6 +365,13 @@ module internal NativeMethods =
     /// Frees the resources of a native CPS object.
     let DestroyObject (obj: NativeObject) =
         Extern.cps_api_object_delete(obj)
+
+    /// Clones an object into another.
+    let CloneObject (dest: NativeObject) (src: NativeObject) =
+        if Extern.cps_api_object_clone(dest, src) then
+            Ok ()
+        else
+            Error "Could not clone object."
 
     /// Checks if an iterator is valid or not.
     let IteratorIsValid (it: NativeObjectIterator) =
@@ -371,13 +420,8 @@ module internal NativeMethods =
     /// Adds a binary attribute to a native CPS object.
     /// On success, returns the handle to the native memory added to the native object.
     let AddAttribute (obj: NativeObject) (aid: NativeAttrID) (value: byte[]) =
-
-        // Pins a copy of the array
-        let handle = GCHandle.Alloc(value, GCHandleType.Pinned)
-
-        // Add the attribute, and return the pinned handle
-        if Extern.cps_api_object_e_add(obj, [| aid |], 1un, CPSAttributeType.Binary, handle.AddrOfPinnedObject(), unativeint value.Length) then
-            Ok handle
+        if Extern.cps_api_object_e_add(obj, [| aid |], 1un, CPSAttributeType.Binary, value, unativeint value.Length) then
+            Ok ()
         else
             Error "Cannot add attribute to native object."
 
@@ -416,6 +460,14 @@ module internal NativeMethods =
             Ok list
         else
             Error "Cannot append native object to list."
+
+    /// Extracts the object at a given index of a native object list.
+    let ObjectListGet list index =
+        let ret = Extern.cps_api_object_list_get(list, index)
+        if ret = IntPtr.Zero then
+            Error (sprintf "Cannot get item %d of native object list." index)
+        else
+            Ok ret
 
     /// Creates a new CPS Get request.
     let CreateGetRequest () =
@@ -490,3 +542,39 @@ module internal NativeMethods =
             Ok()
         else
             Error (sprintf "Error committing transaction (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Initializes the operation subsystem.
+    let InitializeOperationSubsystem () =
+        let mutable handle = 0n
+        let ret = Extern.cps_api_operation_subsystem_init(&handle, 1)
+        if ret = 0 then
+            Ok handle
+        else
+            Error (sprintf "Error initializing operation subsystem (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Registers listeners for the given key.
+    let RegisterServer (handle: nativeint) (key: string) (read: NativeServerCallback) (write: NativeServerCallback) (rollback: NativeServerCallback) =
+        
+        // Prepares the request
+        let mutable req =
+            NativeServerRegistrationRequest(
+                handle = handle,
+                context = 0n,
+                key = Array.zeroCreate 256,
+                read_function = read,
+                write_function = write,
+                rollback_function = rollback
+            )
+        ParseKey key
+        |>> (fun k ->
+            Marshal.Copy(k.Address, req.key, 0, 256)
+            k.Dispose()
+        )
+        |> Result.okOrThrow (invalidArg "key")
+
+        // Registers the server
+        let ret = Extern.cps_api_register(&req)
+        if ret = 0 then
+            Ok ()
+        else
+            Error (sprintf "Cannot register server (Return value: %s = %d)." (ReturnValueToString ret) ret)

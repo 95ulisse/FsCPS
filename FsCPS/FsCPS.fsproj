@@ -66,6 +66,7 @@
     <Compile Include="Yang\SchemaParsers.fs" />
     <None Include="Examples\IPAddress.fsx" />
     <None Include="Examples\Get.fsx" />
+    <None Include="Examples\Server.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">
