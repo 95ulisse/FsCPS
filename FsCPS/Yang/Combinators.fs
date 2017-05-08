@@ -368,11 +368,14 @@ let chld (childSpec: StatementSpec<_>) cardinality (expr: Expr<'a -> #IList>) : 
 
 /// Creates a StatementSpec whose SchemaParser forwards to the reference cell.
 let createSpecForwaredToRef name cardinality : StatementSpec<'a> * StatementSpec<'a> ref =
-    let cell = FSharp.Core.Operators.ref({
-        Name = name;
-        Cardinality = cardinality;
-        Parser = fun ctx -> Ok(Unchecked.defaultof<'a>)
-    })
+    let cell =
+        FSharp.Core.Operators.ref(
+            {
+                Name = name;
+                Cardinality = cardinality;
+                Parser = fun ctx -> Ok(Unchecked.defaultof<'a>)
+            }
+        )
     let spec = {
         Name = name;
         Cardinality = cardinality;

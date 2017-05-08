@@ -14,11 +14,12 @@ module Events =
 
         // The countdown will be used to be sure that the passed functions
         // are called at least once
-        use countdown = new CountdownEvent(
-            1 +
-            (if errListener.IsSome then 1 else 0) +
-            (if completedListener.IsSome then 1 else 0)
-        )
+        use countdown =
+            new CountdownEvent(
+                1 +
+                (if errListener.IsSome then 1 else 0) +
+                (if completedListener.IsSome then 1 else 0)
+            )
         let mutable result = None
 
         obs.Subscribe(

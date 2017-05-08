@@ -1,7 +1,5 @@
 # Todo and improvements
 
-- Fix indentation warnings.
-
 - Replace type Result with a type that differentiates between a common error and a fatal one.
   Something like:
 

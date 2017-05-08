@@ -9,6 +9,8 @@ open FsCPS
 open FsCPS.Yang.Combinators
 open FsCPS.Yang.Model
 
+#nowarn "58" // Indentation
+
 // ------------------------------------------------------------------
 // Argument parsers
 // ------------------------------------------------------------------
