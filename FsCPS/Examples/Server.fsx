@@ -17,7 +17,7 @@ type ExampleCPSServer() =
 
 // Registers the CPS server
 let handle =
-    match CPSServer.Register(CPSKey("1.34."), ExampleCPSServer()) with
+    match CPS.RegisterServer(CPSKey("1.34."), ExampleCPSServer()) with
     | Ok handle -> handle
     | Error e -> invalidOp (sprintf "Server registration failed: %s\n" e)
 

@@ -28,10 +28,31 @@ module internal Result =
         | Ok x -> Ok (f x)
         | Error x -> Error x
 
+    let mapError f res =
+        match res with
+        | Ok x -> Ok x
+        | Error x -> Error (f x)
+
     let okOrThrow f res =
         match res with
         | Ok x -> x
         | Error e -> f e
+
+    let pipe other res =
+        match res with
+        | Ok x ->
+            match other with
+            | Ok y -> Ok(x, y)
+            | Error e2 -> Error e2
+        | Error e1 -> Error e1
+
+    let tee f res =
+        match res with
+        | Ok x ->
+            match f x with
+            | Ok _ -> res
+            | Error e -> Error e
+        | Error x -> res
 
 
 let internal (>>=) res f =

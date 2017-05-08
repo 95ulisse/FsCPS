@@ -64,6 +64,8 @@
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Utils.fs" />
     <Compile Include="Native.fs" />
+    <Compile Include="Events.fs" />
+    <Compile Include="Server.fs" />
     <Compile Include="Yang\StatementParsers.fs" />
     <Compile Include="Yang\Types.fs" />
     <Compile Include="Yang\Imports.fs" />

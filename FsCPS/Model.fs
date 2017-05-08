@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.Collections.ObjectModel
 open System.Runtime.InteropServices
+open System.Threading
 open FsCPS.Native
 
 
@@ -172,9 +173,9 @@ type CPSObject(key: CPSKey) =
         >>= (fun o ->
             NativeMethods.IterateAttributes(nativeObject)
             |> foldResult (fun _ attrId ->
-                let path = CPSPath(NativeMethods.AttrIdToPath(attrId))
-                NativeMethods.GetAttribute nativeObject attrId
-                |>> (fun attr -> o.SetAttribute(path, attr))
+                NativeMethods.AttrIdToPath(attrId)
+                |> Result.pipe (NativeMethods.GetAttribute nativeObject attrId)
+                |>> (fun (path, attr) -> o.SetAttribute(CPSPath path, attr))
             ) ()
             |>> (fun _ -> o)
         )
@@ -332,39 +333,21 @@ type ICPSServer =
 type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
     
     let mutable _isValid = true
-    
-    /// The key for which the server was registered.
-    member val Key = key
 
-    /// The registered server.
-    member val Server = server
+    let protect f arg =
+        try
+            f arg
+        with
+        | e -> Error e.Message
 
-    /// Returns a value indicating whether this registration is still valid.
-    /// To unregister the server, use the method `Cancel`.
-    member val IsValid = _isValid
+    let _nativeGetCallback (_: nativeint) (req: NativeGetParams) (index: unativeint) =
 
-    /// Unregisters the server from the CPS system.
-    member this.Cancel() =
-        if _isValid then
-            
-            // Remove the reference
-            CPSServer.Handles.Remove(this) |> ignore
-            _isValid <- false
-
-            // It looks like it's not possible to unregister a server...
-            raise (NotImplementedException())
-
-    member internal this.NativeGetCallback(_: nativeint, param: nativeint, index: unativeint) =
-        
-        // Param is a pointer to a get request parameters
-        let req = Marshal.PtrToStructure(param, typeof<NativeGetParams>) :?> NativeGetParams
-        
         // Extracts the object from the list and converts it into a managed object
         NativeMethods.ObjectListGet req.filters index
         >>= CPSObject.FromNativeObject
 
         // Invokes the managed server
-        >>= server.Get
+        >>= protect server.Get
 
         // Converts the results to native objects and appends them to the native list
         >>= foldResult (fun _ o ->
@@ -378,10 +361,7 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
            | Ok () -> 0
            | Error _ -> 1 
 
-    member internal this.NativeSetCallback(_: nativeint, param: nativeint, index: unativeint) =
-        
-        // Param is a pointer to a transaction params structure
-        let req = Marshal.PtrToStructure(param, typeof<NativeTransactionParams>) :?> NativeTransactionParams
+    let _nativeSetCallback (_: nativeint) (req: NativeTransactionParams) (index: unativeint) =
 
         // Extracts the object from the list and the operation requested from its key
         NativeMethods.ObjectListGet req.change_list index
@@ -398,7 +378,7 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
         )
 
         // Invokes the managed server and transforms the rollback object to a native one
-        >>= server.Set
+        >>= protect server.Set
         >>= (fun o -> o.ToNativeObject())
 
         // Store the rollback object in the list
@@ -421,17 +401,14 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
            | Ok () -> 0
            | Error _ -> 1
     
-    member internal this.NativeRollbackCallback(_: nativeint, param: nativeint, index: unativeint) =
-        
-        // Param is a pointer to a transaction params structure
-        let req = Marshal.PtrToStructure(param, typeof<NativeTransactionParams>) :?> NativeTransactionParams
+    let _nativeRollbackCallback (_: nativeint) (req: NativeTransactionParams) (index: unativeint) =
 
         // Extracts the object from the list and converts it to a managed one
         NativeMethods.ObjectListGet req.prev index
         >>= CPSObject.FromNativeObject
 
         // Call the server
-        >>= server.Rollback
+        >>= protect server.Rollback
 
         // Converts the result to an integer
         |> function
@@ -439,32 +416,226 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
            | Error _ -> 1
 
 
-/// Provides a set of methods to manage CPS servers.
-and CPSServer private () =
+    interface IDisposable with
+        member this.Dispose() = this.Dispose()
     
-    static let _subsystemHandle = lazy (
+    // We need to be sure that the references to the delegate themselves are kept alive,
+    // so we store them in a property of this object. These delegates will be marshalled as
+    // function pointers to the native code.
+
+    member val internal NativeGetCallback: NativeServerCallback<_> = NativeServerCallback(_nativeGetCallback)
+    member val internal NativeSetCallback: NativeServerCallback<_> = NativeServerCallback(_nativeSetCallback)
+    member val internal NativeRollbackCallback: NativeServerCallback<_> = NativeServerCallback(_nativeRollbackCallback)
+
+    /// The key for which the server was registered.
+    member val Key = key
+
+    /// The registered server.
+    member val Server = server
+
+    /// Returns a value indicating whether this registration is still valid.
+    /// To unregister the server, use the method `Cancel`.
+    member val IsValid = _isValid
+
+    /// Unregisters the server from the CPS system and releases all the resources held.
+    member this.Dispose() =
+        if not _isValid then
+            raise (ObjectDisposedException(typeof<CPSServerHandle>.Name))
+            
+        // It looks like it's not possible to unregister a server...
+        _isValid <- false
+
+        // Unregisters the native callbacks and removes the reference to this server
+        //NativeMethods.UnregisterServer(...)
+        //CPS.ServerHandles.Remove(this) |> ignore
+        //_isValid <- false
+
+
+/// Observable that fires every time a CPS event is raised.
+and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this =
+    
+    let mutable _ended = false
+    let mutable _nextSubscription = 0
+    let mutable _subscriptions = Map.empty<int, IObserver<_>>
+    
+    let _thread = Thread(fun () ->
+        
+        // Creates the object that will receive the events
+        let obj =
+            NativeMethods.CreateObject()
+            |> Result.tee (NativeMethods.ReserveSpaceInObject (unativeint Constants.ObjEventLength))
+            |> Result.okOrThrow invalidOp
+
+        let mutable stop = lock this (fun () -> _ended)
+        while not stop do
+            let res =
+                NativeMethods.WaitForEvent handle obj
+                >>= CPSObject.FromNativeObject
+
+            stop <- lock this (fun () -> _ended)
+
+            // In case of a native error, raise an error and stop the observable.
+            if not stop then
+                match res with 
+                | Ok obj ->
+                    this.RaiseNext obj
+                | Error e ->
+                    this.RaiseError (NativeCPSException e)
+                    this.Dispose()
+                    stop <- true
+
+        // Cleanup
+        NativeMethods.DestroyObject obj
+        NativeMethods.DestroyEventHandle handle |> ignore
+    )
+
+    do
+        // Starts the thread that will suspend waiting for events
+        _thread.Name <- "CPS Event thread for key " + key.Key
+        _thread.IsBackground <- true
+        _thread.Start()
+
+    interface IDisposable with
+        member this.Dispose() = this.Dispose()
+
+    interface IObservable<CPSObject> with
+        member this.Subscribe(observer) = this.Subscribe(observer)
+
+    /// Key for which this observable will emit events.
+    member val Key = key
+
+    /// Returns a value indicating whether this observable is inactive.
+    /// To deactivate the observable, call the `Dispose` method.
+    member val IsCompleted = _ended
+
+    member private this.RaiseNext(newValue) =
+        _subscriptions
+        |> Map.iter (fun _ obs ->
+            try
+                obs.OnNext(newValue)
+            with
+            | e -> this.RaiseError(e)
+        )
+
+    member private this.RaiseError(err: Exception) =
+        _subscriptions
+        |> Map.iter (fun _ obs ->
+            obs.OnError(err)
+        )
+
+    member private this.RaiseCompleted () =
+        _subscriptions
+        |> Map.iter (fun _ obs ->
+            try
+                obs.OnCompleted()
+            with
+            | e -> this.RaiseError(e)
+        )
+
+    /// Notifies the provider that an observer is ready to receive notifications.
+    member this.Subscribe(observer: IObserver<CPSObject>) =
+        lock this (fun () ->
+            if this.IsCompleted then
+                raise (ObjectDisposedException(typeof<CPSEventObservable>.Name))
+
+            let observerKey = _nextSubscription
+            _nextSubscription <- _nextSubscription + 1
+            _subscriptions <- _subscriptions.Add(observerKey, observer)
+            {
+                new IDisposable with
+                    member __.Dispose() =
+                        lock this (fun () ->
+                            _subscriptions <- _subscriptions.Remove(observerKey)
+                        )
+            }
+        )
+
+    /// Releases all the native resources allocated and stops emitting events.
+    /// This will emit an `OnComplete` event.
+    member this.Dispose() =
+        lock this (fun () ->
+            if this.IsCompleted then
+                raise (ObjectDisposedException(typeof<CPSEventObservable>.Name))
+            
+            // The native library does not provide a way to wake up a thread suspended
+            // in a cps_api_wait_for_event call, so we can do nothing to stop it from the outside.
+            // The thread will actually stop when the next event is generated.
+            _ended <- true
+
+        )
+        this.RaiseCompleted()
+
+
+/// Provides a set of methods to manage global CPS services.
+and CPS private () =
+    
+    static let _opSubsystemHandle = lazy (
         NativeMethods.InitializeOperationSubsystem()
         |> Result.okOrThrow invalidOp
     )
 
-    static member val internal Handles: ResizeArray<_> = ResizeArray<CPSServerHandle>()
+    static let _eventSubsystemInitialization = lazy (
+        NativeMethods.InitializeEventSubsystem()
+        |> Result.okOrThrow invalidOp
+    )
+    
+    static let _eventPublishingHandle = lazy (
+        _eventSubsystemInitialization.Force()
+        NativeMethods.CreateEventHandle()
+        |> Result.okOrThrow invalidOp
+    )
+
+    static member val internal ServerHandles: ResizeArray<_> = ResizeArray<CPSServerHandle>()
 
     /// Registers a new CPS server with the given key.
     /// Returns an handle that can be used to cancel the registration
-    static member Register(key: CPSKey, server: ICPSServer) =
+    static member RegisterServer(key: CPSKey, server: ICPSServer) =
         
         // Create a new handle and register it
-        let handle = CPSServerHandle(key, server)
+        let handle = new CPSServerHandle(key, server)
         NativeMethods.RegisterServer
-            _subsystemHandle.Value
+            _opSubsystemHandle.Value
             key.Key
-            (NativeServerCallback(handle.NativeGetCallback))
-            (NativeServerCallback(handle.NativeSetCallback))
-            (NativeServerCallback(handle.NativeRollbackCallback))
+            handle.NativeGetCallback
+            handle.NativeSetCallback
+            handle.NativeRollbackCallback
 
         // Keep a reference to the handle to make sure that the GC does not collect it
         // invalidating the function pointers that we passed to the native code
         |>> (fun _ ->
-            CPSServer.Handles.Add(handle)
+            CPS.ServerHandles.Add(handle)
             handle
         )
+
+    /// Starts listening for CPS events with the given key.
+    /// Returns an observable that will fire every time an event is published.
+    /// Note that the subscribers of the observable will be called on another thread.
+    static member ListenEvents(key: CPSKey) =
+        
+        // Initializes the event subsystem
+        _eventSubsystemInitialization.Force() |> ignore
+
+        // Creates a new handle for the events
+        NativeMethods.CreateEventHandle()
+
+        // Registers the key in the handle
+        |> Result.pipe (NativeMethods.ParseKey key.Key)
+        |> Result.tee (fun (handle, k) ->
+            NativeMethods.RegisterEventFilter handle k.Address
+        )
+
+        // Disposes the native key
+        |>> (fun (handle, k) ->
+            k.Dispose()
+            (handle, key)
+        )
+
+        // Constructs and returns the observable
+        |>> CPSEventObservable
+
+
+    /// Publishes an event to the CPS system.
+    static member PublishEvent(obj: CPSObject) =
+        obj.ToNativeObject()
+        |> Result.tee (NativeMethods.PublishEvent _eventPublishingHandle.Value)
+        |>> NativeMethods.DestroyObject

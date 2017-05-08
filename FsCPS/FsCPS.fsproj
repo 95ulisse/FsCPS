@@ -67,6 +67,7 @@
     <None Include="Examples\IPAddress.fsx" />
     <None Include="Examples\Get.fsx" />
     <None Include="Examples\Server.fsx" />
+    <None Include="Examples\TraceEvents.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">

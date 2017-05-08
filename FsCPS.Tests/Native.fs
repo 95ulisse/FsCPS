@@ -5,6 +5,7 @@ open FsCheck
 open FsCheck.Xunit
 open FsCPS
 open FsCPS.Native
+open FsCPS.Tests.Utils
 
 
 // String representation of a native key
@@ -24,7 +25,22 @@ type Arbitraries() =
         |> Gen.elements
         |> Gen.map NativeKeyString
         |> Arb.fromGen
-
+    static member CPSPath() =
+        [
+            "base-ip";
+            "base-ip/ipv4";
+            "base-ip/ipv4/address";
+            "base-ip/ipv4/address/ip";
+            "base-ip/ipv4/ifindex"
+        ]
+        |> Gen.elements
+        |> Gen.map CPSPath
+        |> Arb.fromGen
+    static member CPSPathList() =
+        Arb.generate<CPSPath>
+        |> Gen.listOf
+        |> Gen.map List.distinct
+        |> Arb.fromGen
         
 [<Properties(Arbitrary = [| typeof<Arbitraries> |])>]
 module Native =
@@ -82,3 +98,63 @@ module Native =
         |> Result.okOrThrow invalidOp
 
         result
+        
+    [<Property>]
+    let ``Object attributes can be iterated upon`` (NativeKeyString key) (paths: CPSPath list) =
+        
+        // Creates a new object with the given attributes
+        let managedObj = CPSObject(CPSKey(key))
+        paths
+        |> List.iter (fun path -> managedObj.SetAttribute(path, [| 1uy; 2uy; 3uy; 4uy |]))
+
+        // Convert the object to a native one and try yo iterate the attributes
+        managedObj.ToNativeObject()
+        |>> (fun nativeObject ->
+            NativeMethods.IterateAttributes nativeObject
+            |> Seq.fold (fun (res, count) attrId ->
+                if not res then
+                    (false, 0)
+                else
+                    NativeMethods.AttrIdToPath attrId
+                    |>> CPSPath
+                    >>= (fun path ->
+                        match managedObj.GetAttribute(path) with
+                        | None -> Ok(false, 0)
+                        | Some attr ->
+                            NativeMethods.GetAttribute nativeObject attrId
+                            |>> (fun attrValue -> (attrValue = attr.Value, count + 1))
+                    )
+                    |> function
+                        | Ok x -> x
+                        | Error _ -> (false, 0)
+            ) (true, 0)
+            |> (fun (res, count) ->
+                Assert.True(res, "Attributes do not correspond.")
+                Assert.Equal(managedObj.Attributes.Count, count)
+            )
+            nativeObject
+        )
+        |>> NativeMethods.DestroyObject
+
+        // Raise an exception in case of error
+        |> Result.okOrThrow invalidOp
+
+    [<Property>]
+    let  ``Reconstructing a managed object from a native one preserves attributes`` (NativeKeyString key) (paths: CPSPath list) =
+        
+        // Creates a new object with the given attributes
+        let obj = CPSObject(CPSKey(key))
+        paths
+        |> List.iter (fun path -> obj.SetAttribute(path, [| 1uy; 2uy; 3uy; 4uy |]))
+
+        // Convert the object to native and back to managed
+        let obj2 =
+            obj.ToNativeObject()
+            >>= (fun nativeObj ->
+                CPSObject.FromNativeObject nativeObj
+                |> Result.tee (fun _ -> Ok(NativeMethods.DestroyObject nativeObj))
+            )
+            |> Result.okOrThrow invalidOp
+
+        // Check that the objects have the same data
+        AssertCPSObjectEquals obj obj2

@@ -2,6 +2,9 @@
 
 open System
 
+type NativeCPSException(msg) =
+    inherit Exception(msg)
+
 
 type CPSQualifier =
     | Target = 1
@@ -48,15 +51,21 @@ open FsCPS
 // avoiding manual pinning and continuous copies when these types are passed
 // in the managed code.
 
+module internal Constants =
+    [<Literal>]
+    let KeyLength = 256
+    [<Literal>]
+    let ObjEventLength = 50000
+
 type internal NativeKeyStorage private (addr: nativeint) =
 
     interface IDisposable with
         member this.Dispose() = this.Dispose()
 
     new () as this =
-        new NativeKeyStorage(Marshal.AllocHGlobal(256 + 8))
+        new NativeKeyStorage(Marshal.AllocHGlobal(Constants.KeyLength + 8))
         then
-            Marshal.WriteInt64(this.Address, 256, 42L)
+            Marshal.WriteInt64(this.Address, Constants.KeyLength, 42L)
 
     member val Address = addr
 
@@ -65,7 +74,7 @@ type internal NativeKeyStorage private (addr: nativeint) =
         Marshal.FreeHGlobal(addr)
 
     member this.CheckCanary() =
-        let canary = Marshal.ReadInt64(addr, 256)
+        let canary = Marshal.ReadInt64(addr, Constants.KeyLength)
         if canary <> 42L then
             invalidOp (sprintf "CANARY: %d" canary)
 
@@ -113,7 +122,16 @@ type internal NativeTransactionParams =
         { change_list = 0n; prev = 0n; timeout = 0un }
 
 
-type internal NativeServerCallback = delegate of (nativeint * nativeint * unativeint) -> int
+type internal NativeServerCallback<'TParam when 'TParam : not struct> = delegate of nativeint * 'TParam * unativeint -> int
+
+type internal NativeEventHandle = nativeint
+
+[<Struct>]
+[<StructLayout(LayoutKind.Sequential)>]
+type internal NativeEventRegistration =
+    val mutable priority: int
+    val mutable objects: nativeint
+    val mutable objects_size: unativeint
 
 
 [<Struct>]
@@ -121,14 +139,14 @@ type internal NativeServerCallback = delegate of (nativeint * nativeint * unativ
 type internal NativeServerRegistrationRequest =
     val mutable handle: nativeint
     val mutable context: nativeint
-    [<MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)>]
+    [<MarshalAs(UnmanagedType.ByValArray, SizeConst = Constants.KeyLength)>]
     val mutable key: byte[]
     [<MarshalAs(UnmanagedType.FunctionPtr)>]
-    val mutable read_function: NativeServerCallback
+    val mutable read_function: NativeServerCallback<NativeGetParams>
     [<MarshalAs(UnmanagedType.FunctionPtr)>]
-    val mutable write_function: NativeServerCallback
+    val mutable write_function: NativeServerCallback<NativeTransactionParams>
     [<MarshalAs(UnmanagedType.FunctionPtr)>]
-    val mutable rollback_function: NativeServerCallback
+    val mutable rollback_function: NativeServerCallback<NativeTransactionParams>
 
 
 /// Definitions of all the native methods needed by FsCPS.
@@ -161,6 +179,9 @@ module internal NativeMethods =
 
         [<DllImport(cpsLibrary)>]
         extern void cps_api_object_set_key(NativeObject obj, nativeint key)
+
+        [<DllImport(cpsLibrary)>]
+        extern bool cps_api_object_reserve(NativeObject obj, unativeint size)
 
         // Object attributes
 
@@ -209,7 +230,7 @@ module internal NativeMethods =
         extern nativeint cps_dict_find_by_name(string path)
 
         [<DllImport(cpsLibrary)>]
-        extern string cps_attr_id_to_name(NativeAttrID id)
+        extern nativeint cps_attr_id_to_name(NativeAttrID id)
 
         // Object lists
 
@@ -268,6 +289,25 @@ module internal NativeMethods =
         [<DllImport(cpsLibrary)>]
         extern int cps_api_object_type_operation(nativeint key)
 
+        // Events
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_event_service_init()
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_event_client_connect(NativeEventHandle& handle)
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_event_client_disconnect(NativeEventHandle handle)
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_event_client_register(NativeEventHandle handle, NativeEventRegistration& reg)
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_wait_for_event(NativeEventHandle handle, NativeObject obj)
+
+        [<DllImport(cpsLibrary)>]
+        extern int cps_api_event_publish(NativeEventHandle handle, NativeObject obj)
 
     // Initializes the native library as soon as the module is loaded.
     do
@@ -314,7 +354,11 @@ module internal NativeMethods =
 
     /// Converts an attribute ID to a path name.
     let AttrIdToPath id =
-        Extern.cps_attr_id_to_name(id)
+        let ptr = Extern.cps_attr_id_to_name(id)
+        if ptr = IntPtr.Zero then
+            Error (sprintf "Cannot find attribute with id %d" id)
+        else
+            Ok (Marshal.PtrToStringAnsi(ptr))
 
     /// Creates a native key out of a qualifier and a path.
     let CreateKey qual path =
@@ -372,20 +416,27 @@ module internal NativeMethods =
             Ok ()
         else
             Error "Could not clone object."
+       
+    /// Reserves the given amount of space in an object.
+    let ReserveSpaceInObject (size: unativeint) (obj: NativeObject) =
+        if Extern.cps_api_object_reserve(obj, size) then
+            Ok ()
+        else
+            Error "Could not reseve space in object."
 
     /// Checks if an iterator is valid or not.
     let IteratorIsValid (it: NativeObjectIterator) =
         if it.attr = IntPtr.Zero then
             false
         else
-            let len = IPAddress.NetworkToHostOrder(Marshal.ReadInt64(it.attr, sizeof<uint64>))
+            let len = Marshal.ReadInt64(it.attr, sizeof<uint64>)
             let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
             it.len >= totalLen
 
     /// Advances the given iterator.
     let IteratorNext (it: NativeObjectIterator) =
         if it.attr <> IntPtr.Zero then
-            let len = IPAddress.NetworkToHostOrder(Marshal.ReadInt64(it.attr, sizeof<uint64>))
+            let len = Marshal.ReadInt64(it.attr, sizeof<uint64>)
             let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
             if it.len < totalLen then
                 it.attr <- IntPtr.Zero
@@ -394,28 +445,28 @@ module internal NativeMethods =
                 it.attr <- it.attr + nativeint totalLen
 
     /// Returns a sequence that iterates over all the attributes in the given object.
-    let IterateAttributes (obj: NativeObject) =
-        seq {
-            // Creates an iterator
-            let it = NativeObjectIterator()
-            let handle = GCHandle.Alloc(it, GCHandleType.Pinned)
-            Extern.cps_api_object_it_begin(obj, it)
+    let IterateAttributes (obj: NativeObject) : seq<_> =
+        // Creates an iterator
+        let it = NativeObjectIterator()
+        Extern.cps_api_object_it_begin(obj, it)
 
-            // Walks the iterator
+        // Walks the iterator
+        seq {
             while IteratorIsValid it do
                 yield Extern.cps_api_object_attr_id(it.attr)
                 IteratorNext(it)
-
-            handle.Free()
         }
 
     /// Returns a sequence that iterates over all the native objects in the given list.
     let IterateObjectList (l: NativeObjectList) =
-        seq {
-            let len = Extern.cps_api_object_list_size(l)
-            for i = 0un to len - 1un do
-                yield Extern.cps_api_object_list_get(l, i)
-        }
+        let len = Extern.cps_api_object_list_size(l)
+        if len = 0un then
+            Seq.empty
+        else
+            seq {
+                for i = 0un to len - 1un do
+                    yield Extern.cps_api_object_list_get(l, i)
+            }
 
     /// Adds a binary attribute to a native CPS object.
     /// On success, returns the handle to the native memory added to the native object.
@@ -553,21 +604,21 @@ module internal NativeMethods =
             Error (sprintf "Error initializing operation subsystem (Return value: %s = %d)." (ReturnValueToString ret) ret)
 
     /// Registers listeners for the given key.
-    let RegisterServer (handle: nativeint) (key: string) (read: NativeServerCallback) (write: NativeServerCallback) (rollback: NativeServerCallback) =
+    let RegisterServer (handle: nativeint) (key: string) (read: NativeServerCallback<_>) (write: NativeServerCallback<_>) (rollback: NativeServerCallback<_>) =
         
         // Prepares the request
         let mutable req =
             NativeServerRegistrationRequest(
                 handle = handle,
                 context = 0n,
-                key = Array.zeroCreate 256,
+                key = Array.zeroCreate Constants.KeyLength,
                 read_function = read,
                 write_function = write,
                 rollback_function = rollback
             )
         ParseKey key
         |>> (fun k ->
-            Marshal.Copy(k.Address, req.key, 0, 256)
+            Marshal.Copy(k.Address, req.key, 0, Constants.KeyLength)
             k.Dispose()
         )
         |> Result.okOrThrow (invalidArg "key")
@@ -578,3 +629,60 @@ module internal NativeMethods =
             Ok ()
         else
             Error (sprintf "Cannot register server (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Initializes the event subsystem and starts the event thread.
+    let InitializeEventSubsystem () =
+        let ret = Extern.cps_api_event_service_init()
+        if ret = 0 then
+            Ok ()
+        else
+            Error (sprintf "Cannot initialize event service (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Creates a new handle on which CPS events can be listened to.
+    let CreateEventHandle () : Result<NativeEventHandle, _> =
+        let mutable handle = 0n
+        let ret = Extern.cps_api_event_client_connect(&handle)
+        if ret = 0 then
+            Ok handle
+        else
+            Error (sprintf "Cannot create event handle (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Destroys an event handle.
+    let DestroyEventHandle (handle: NativeEventHandle) =
+        let ret = Extern.cps_api_event_client_disconnect(handle)
+        if ret = 0 then
+            Ok ()
+        else
+            Error (sprintf "Cannot destroy event handle (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Registers a key as a filter for an event handle.
+    let RegisterEventFilter (handle: NativeEventHandle) (key: nativeint) =
+        let mutable reg =
+            NativeEventRegistration(
+                priority = 0,
+                objects = key,
+                objects_size = 1un
+            )
+        let ret = Extern.cps_api_event_client_register(handle, &reg)
+        if ret = 0 then
+            Ok ()
+        else
+            Error (sprintf "Cannot register native event (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Suspends the current thread waiting for a new event to arrive.
+    /// When an event arrives, the given object is filled with details.
+    /// Returns the same object (but filled) for chaining.
+    let WaitForEvent (handle: NativeEventHandle) (obj: NativeObject) =
+        let ret = Extern.cps_api_wait_for_event(handle, obj)
+        if ret = 0 then
+            Ok obj
+        else
+            Error (sprintf "Cannot receive event (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+    /// Publishes an event to the CPS system.
+    let PublishEvent (handle: NativeEventHandle) (obj: NativeObject) =
+        let ret = Extern.cps_api_event_publish(handle, obj)
+        if ret = 0 then
+            Ok ()
+        else
+            Error (sprintf "Cannot publish event (Return value: %s = %d)." (ReturnValueToString ret) ret)

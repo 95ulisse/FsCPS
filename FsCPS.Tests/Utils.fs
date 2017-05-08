@@ -53,3 +53,19 @@ module Utils =
                 """ + inner + """
             }
         """)
+
+    let AssertCPSObjectEquals (a: CPSObject) (b: CPSObject) =
+        // Compares the keys
+        if a.Key.Key <> b.Key.Key then
+            raise (XunitException (sprintf "Expected object with key %s, but got %s." a.Key.Key b.Key.Key))
+        
+        // Compares the attributes
+        a.Attributes
+        |> Seq.iter (fun pair ->
+            match b.GetAttribute(pair.Key) with
+            | None ->
+                raise (XunitException (sprintf "Missing attribute with path %s." (pair.Key.ToString())))
+            | Some attr2 ->
+                if pair.Value.Value <> attr2.Value then
+                    raise (XunitException (sprintf "Expected ttribute with path %s to have value %A, but got %A." (pair.Key.ToString()) pair.Value.Value attr2.Value))
+        )
