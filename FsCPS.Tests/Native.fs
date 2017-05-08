@@ -50,7 +50,7 @@ module Native =
         let str2 =
             NativeMethods.ParseKey str
             |>> (fun k ->
-                let res = NativeMethods.PrintKey(k.Address)
+                let res = NativeMethods.PrintKey(k)
                 k.Dispose()
                 res
             )
@@ -79,10 +79,10 @@ module Native =
             )
 
         // Folds the objects into a list
-        let list =
+        use list =
             objects
             |> foldResult
-                NativeMethods.AppendObjectToList
+                NativeMethods.MoveObjectIntoList
                 (NativeMethods.CreateObjectList() |> Result.okOrThrow invalidOp)
             |> Result.okOrThrow invalidOp
 
@@ -91,11 +91,7 @@ module Native =
             list
             |> NativeMethods.IterateObjectList
             |> Seq.zip objects
-            |> Seq.forall (fun (obj, expectedObj) -> obj = expectedObj)
-
-        // Cleanup
-        NativeMethods.DestroyObjectList true list
-        |> Result.okOrThrow invalidOp
+            |> Seq.forall (fun (obj, expectedObj) -> obj.DangerousGetHandle() = expectedObj.DangerousGetHandle())
 
         result
         
@@ -134,7 +130,7 @@ module Native =
             )
             nativeObject
         )
-        |>> NativeMethods.DestroyObject
+        |>> (fun o -> o.Dispose())
 
         // Raise an exception in case of error
         |> Result.okOrThrow invalidOp
@@ -152,7 +148,7 @@ module Native =
             obj.ToNativeObject()
             >>= (fun nativeObj ->
                 CPSObject.FromNativeObject nativeObj
-                |> Result.tee (fun _ -> Ok(NativeMethods.DestroyObject nativeObj))
+                |> Result.tee (fun _ -> Ok(nativeObj.Dispose()))
             )
             |> Result.okOrThrow invalidOp
 

@@ -10,20 +10,15 @@
   | Fatal of Exception
   ```
 
-- Check for leaks of native memory.
-  The `>>=` and `|>>` operators used in the code usually free memory only in case of success.
-  Maybe wrap the native pointers in an `IDisposable` that will automatically release the memory.
-  To use that, maybe an helper like `Result.using` or an operator `>>?`.
+- YANG parser:
+  - Add more builtin models.
+  - Finish implementing the spec.
+  - Rewrite the type properties to be something more type-safe.
 
 - Embedded attributes.
   At the moment, the library supports just one "level" (?) of attributes.
   I could not find any documentation about this.
   Also fix functions like `AttrIdFromPath` that have magic offsets inside.
-
-- YANG parser:
-  - Add more builtin models.
-  - Finish implementing the spec.
-  - Rewrite the type properties to be something more type-safe.
 
 - Native interop:
   - Find a way to wake up a thread suspended on a cps_api_wait_for_event call. (`CPSEventObservable`)

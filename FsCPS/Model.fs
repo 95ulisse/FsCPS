@@ -36,7 +36,7 @@ type CPSKey private (key, qual, path) =
         let key =
             NativeMethods.CreateKey qual (path.ToString())
             |>> (fun k ->
-                let str = NativeMethods.PrintKey(k.Address)
+                let str = NativeMethods.PrintKey(k)
                 k.Dispose()
                 str
             )
@@ -268,9 +268,12 @@ type CPSTransaction() =
         
         // These references are used for cleanup
         let mutable req = None
+        let mutable reqFilters = None
 
         let readResponse (req: NativeGetParams) () =
-            NativeMethods.IterateObjectList(req.list)
+            use reqList = new NativeObjectList(req.list, false)
+
+            NativeMethods.IterateObjectList(reqList)
             |> foldResult (fun objectList nativeObject ->
 
                 // Read the object and append the object to the list
@@ -282,14 +285,18 @@ type CPSTransaction() =
             // Revert the list of objects to match the original order
             |>> List.rev
 
-        let mutable result =
+        let mutable result = 
 
             // Creates a new request with the given filters
             NativeMethods.CreateGetRequest()
-            >>= (fun t -> req <- Some t; Ok(t))
+            >>= (fun t ->
+                req <- Some t
+                reqFilters <- Some(new NativeObjectList(t.filters, false))
+                Ok(t)
+            )
             >>= addObjects
                     filters
-                    (fun req obj -> NativeMethods.AppendObjectToList req.filters obj |>> ignore)
+                    (fun req obj -> NativeMethods.MoveObjectIntoList reqFilters.Value obj |>> ignore)
 
             // And sends the request
             >>= NativeMethods.GetRequestSend
@@ -305,6 +312,8 @@ type CPSTransaction() =
             match NativeMethods.DestroyGetRequest(req.Value), result with
             | Error e, Ok _ -> result <- Error e
             | _ -> ()
+        if reqFilters.IsSome then
+            reqFilters.Value.Dispose()
 
         result
 
@@ -342,8 +351,11 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
 
     let _nativeGetCallback (_: nativeint) (req: NativeGetParams) (index: unativeint) =
 
+        use reqFilters = new NativeObjectList(req.filters, false)
+        use reqList = new NativeObjectList(req.list, false)
+
         // Extracts the object from the list and converts it into a managed object
-        NativeMethods.ObjectListGet req.filters index
+        NativeMethods.ObjectListGet reqFilters index
         >>= CPSObject.FromNativeObject
 
         // Invokes the managed server
@@ -352,7 +364,7 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
         // Converts the results to native objects and appends them to the native list
         >>= foldResult (fun _ o ->
             o.ToNativeObject()
-            |>> NativeMethods.AppendObjectToList req.list
+            |>> NativeMethods.MoveObjectIntoList reqList
             |>> ignore
         ) ()
 
@@ -363,8 +375,11 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
 
     let _nativeSetCallback (_: nativeint) (req: NativeTransactionParams) (index: unativeint) =
 
+        use reqChangeList = new NativeObjectList(req.change_list, false)
+        use reqPrev = new NativeObjectList(req.prev, false)
+
         // Extracts the object from the list and the operation requested from its key
-        NativeMethods.ObjectListGet req.change_list index
+        NativeMethods.ObjectListGet reqChangeList index
         >>= (fun o ->
             NativeMethods.GetObjectKey o
             >>= NativeMethods.GetOperationFromKey
@@ -386,12 +401,12 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
             
             // If there was an object already allocated, copy the returned object, otherwise
             // append directly it to the list
-            match NativeMethods.ObjectListGet req.prev index with
+            match NativeMethods.ObjectListGet reqPrev index with
             | Ok dest ->
                 NativeMethods.CloneObject dest nativeRollbackObject
-                |>> (fun _ -> NativeMethods.DestroyObject nativeRollbackObject)
+                |>> (fun _ -> nativeRollbackObject.Dispose())
             | Error _ ->
-                NativeMethods.AppendObjectToList req.prev nativeRollbackObject
+                NativeMethods.MoveObjectIntoList reqPrev nativeRollbackObject
                 |>> ignore
 
         )
@@ -403,8 +418,10 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
     
     let _nativeRollbackCallback (_: nativeint) (req: NativeTransactionParams) (index: unativeint) =
 
+        use reqPrev = new NativeObjectList(req.prev, false)
+
         // Extracts the object from the list and converts it to a managed one
-        NativeMethods.ObjectListGet req.prev index
+        NativeMethods.ObjectListGet reqPrev index
         >>= CPSObject.FromNativeObject
 
         // Call the server
@@ -461,7 +478,7 @@ and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this
     let _thread = Thread(fun () ->
         
         // Creates the object that will receive the events
-        let obj =
+        use obj =
             NativeMethods.CreateObject()
             |> Result.tee (NativeMethods.ReserveSpaceInObject (unativeint Constants.ObjEventLength))
             |> Result.okOrThrow invalidOp
@@ -485,8 +502,7 @@ and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this
                     stop <- true
 
         // Cleanup
-        NativeMethods.DestroyObject obj
-        NativeMethods.DestroyEventHandle handle |> ignore
+        handle.Dispose()
     )
 
     do
@@ -567,7 +583,7 @@ and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this
 
 
 /// Provides a set of methods to manage global CPS services.
-and CPS private () =
+and [<AbstractClass; Sealed>] CPS private () =
     
     static let _opSubsystemHandle = lazy (
         NativeMethods.InitializeOperationSubsystem()
@@ -621,7 +637,7 @@ and CPS private () =
         // Registers the key in the handle
         |> Result.pipe (NativeMethods.ParseKey key.Key)
         |> Result.tee (fun (handle, k) ->
-            NativeMethods.RegisterEventFilter handle k.Address
+            NativeMethods.RegisterEventFilter handle k
         )
 
         // Disposes the native key
@@ -638,4 +654,4 @@ and CPS private () =
     static member PublishEvent(obj: CPSObject) =
         obj.ToNativeObject()
         |> Result.tee (NativeMethods.PublishEvent _eventPublishingHandle.Value)
-        |>> NativeMethods.DestroyObject
+        |>> (fun o -> o.Dispose())
