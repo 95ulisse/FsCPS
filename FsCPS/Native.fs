@@ -337,7 +337,8 @@ module internal NativeMethods =
             k.CheckCanary()
             Ok k
         else
-            Error "Could not set parse key."
+            k.Dispose()
+            Error "Could not parse key."
 
     /// Converts a human-readable string path to an Attribute ID.
     let AttrIdFromPath path =

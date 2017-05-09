@@ -451,6 +451,12 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
         //_isValid <- false
 
 
+/// A single event published by the CPS system.
+and [<Struct>] CPSEvent internal (op: CPSOperationType, obj: CPSObject) =
+    member this.Operation = op
+    member this.Object = obj
+
+
 /// Observable that fires every time a CPS event is raised.
 and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this =
     
@@ -470,15 +476,20 @@ and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this
         while not stop do
             let res =
                 NativeMethods.WaitForEvent handle obj
-                >>= CPSObject.FromNativeObject
+                >>= (fun obj ->
+                    NativeMethods.GetObjectKey obj
+                    >>= NativeMethods.GetOperationFromKey
+                    |> Result.pipe (CPSObject.FromNativeObject obj)
+                    |>> CPSEvent
+                )
 
             stop <- lock this (fun () -> _ended)
 
             // In case of a native error, raise an error and stop the observable.
             if not stop then
-                match res with 
-                | Ok obj ->
-                    this.RaiseNext obj
+                match res with
+                | Ok evt ->
+                    this.RaiseNext evt
                 | Error e ->
                     this.RaiseError (NativeCPSException e)
                     this.Dispose()
@@ -498,7 +509,7 @@ and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this
     interface IDisposable with
         member this.Dispose() = this.Dispose()
 
-    interface IObservable<CPSObject> with
+    interface IObservable<CPSEvent> with
         member this.Subscribe(observer) = this.Subscribe(observer)
 
     /// Key for which this observable will emit events.
@@ -533,7 +544,7 @@ and CPSEventObservable internal (handle: NativeEventHandle, key: CPSKey) as this
         )
 
     /// Notifies the provider that an observer is ready to receive notifications.
-    member this.Subscribe(observer: IObserver<CPSObject>) =
+    member this.Subscribe(observer: IObserver<_>) =
         lock this (fun () ->
             if this.IsCompleted then
                 raise (ObjectDisposedException(typeof<CPSEventObservable>.Name))
