@@ -50,7 +50,7 @@ module Server =
         trans.Commit()
         |> Result.okOrThrow invalidOp
 
-    [<Fact>]
+    [<Fact(Skip = "Skipped because of key exhaustion bug.")>]
     let ``Get requests return the same objects returned by the server`` () =
         let buildObjects k =
             let objWithAttr = CPSObject(subkey1)
@@ -70,7 +70,7 @@ module Server =
             (fun _ -> invalidOp "Rollback should not be called")
     
         
-    [<Fact>]
+    [<Fact(Skip = "Skipped because of key exhaustion bug.")>]
     let ``Set method gets called`` () =
         let mutable operationsInvoked = []
         createAndInvoke
@@ -91,7 +91,7 @@ module Server =
             operationsInvoked
         )
             
-    [<Fact>]
+    [<Fact(Skip = "Skipped because of key exhaustion bug.")>]
     let ``Rollback method gets passed the object returned by the set method`` () =
         let mutable rollbackObject = Unchecked.defaultof<CPSObject>
         createAndInvoke
