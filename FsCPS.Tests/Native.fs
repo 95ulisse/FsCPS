@@ -44,6 +44,20 @@ type Arbitraries() =
         
 [<Properties(Arbitrary = [| typeof<Arbitraries> |])>]
 module Native =
+
+    [<Property>]
+    let internal ``Key parsing reports failure for invalid keys`` (CPSPath path) =
+        match NativeMethods.ParseKey path with
+        | Error _ -> true
+        | _ -> false
+
+    [<Property>]
+    let internal ``CPSKey constructor throws if an invalid key is passed`` (CPSPath path) =
+        try
+            CPSKey path |> ignore
+            false
+        with
+        | _ -> true
     
     [<Property>]
     let internal ``Keys can be converted from string to binary and viceversa`` (NativeKeyString str) =

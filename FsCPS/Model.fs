@@ -46,6 +46,12 @@ type CPSKey private (key, qual, path) =
     /// Constructs a new key from its string representation.
     /// Note that this will make the properties `Qualifier` and `Path` unavailable.
     new (key) =
+
+        // Validates the key
+        NativeMethods.ParseKey key
+        |>> (fun k -> k.Dispose())
+        |> Result.okOrThrow (invalidArg "key")
+
         CPSKey(key, None, None)
 
     /// String representation of the key.

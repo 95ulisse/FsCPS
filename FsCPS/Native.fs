@@ -39,9 +39,9 @@ namespace FsCPS.Native
 #nowarn "9" // Unverifiable IL
 
 open System
-open System.Net
 open System.Runtime.InteropServices
 open System.Text
+open System.Text.RegularExpressions
 open FsCPS
 
 
@@ -313,6 +313,9 @@ module internal NativeMethods =
     do
         Extern.cps_api_class_map_init()
 
+    // Precompiled regex to validate key strings
+    let private _keyRegex = Regex("^(\d+\.?)+$", RegexOptions.Compiled)
+
     /// Returns a string representation of a CPS error code.
     let ReturnValueToString ret =
         match ret with
@@ -332,13 +335,19 @@ module internal NativeMethods =
 
     /// Parses the given string representation of a key into an actual key.
     let ParseKey str =
-        let k = new NativeKeyStorage()
-        if Extern.cps_api_key_from_string(k.Address, str) then
-            k.CheckCanary()
-            Ok k
-        else
-            k.Dispose()
+        
+        // We validate the key manually, since it does look like that the native function
+        // always returns true.
+        if not (_keyRegex.IsMatch(str)) then
             Error "Could not parse key."
+        else
+            let k = new NativeKeyStorage()
+            if Extern.cps_api_key_from_string(k.Address, str) then
+                k.CheckCanary()
+                Ok k
+            else
+                k.Dispose()
+                Error "Could not parse key."
 
     /// Converts a human-readable string path to an Attribute ID.
     let AttrIdFromPath path =
