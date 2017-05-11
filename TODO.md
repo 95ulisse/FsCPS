@@ -13,7 +13,6 @@
 - YANG parser:
   - Add more builtin models.
   - Finish implementing the spec.
-  - Rewrite the type properties to be something more type-safe.
 
 - Check for leaks of native memory.
   The `>>=` and `|>>` operators used in the code usually free memory only in case of success.

@@ -144,9 +144,11 @@ let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
 
 type YANGTypeRef(t: YANGType) =
     inherit YANGNode()
+
+    let _additionalProperties = Dictionary<string, obj>()
+
     member val Value = t with get, set
     member val AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
-    member val AdditionalProperties = Dictionary<string, obj>()
 
     member this.ToNewType(name) =
         this.MergeInto(YANGType(name))
@@ -154,10 +156,18 @@ type YANGTypeRef(t: YANGType) =
     member this.MergeInto(t: YANGType) =
         t.BaseType <- Some this.Value
         t.Restrictions.AddRange(this.AdditionalRestrictions)
-        this.AdditionalProperties |> Seq.iter (fun pair -> t.SetProperty(pair.Key, pair.Value))
+        _additionalProperties |> Seq.iter (fun pair -> t.SetProperty(pair.Key, pair.Value))
                 
         // Check that the required properties have been provided
         t.CheckRequiredProperties()
+
+    member this.SetProperty<'T>(prop: YANGTypeProperty<'T>, value: 'T) =
+        _additionalProperties.Add(prop.Name, value)
+
+    member this.GetProperty<'T>(prop: YANGTypeProperty<'T>) =
+        match _additionalProperties.TryGetValue(prop.Name) with
+        | (true, x) -> Some(x :?> 'T)
+        | _ -> None
 
 type YANGImport(moduleName: string) =
     inherit YANGNode()
@@ -196,8 +206,8 @@ let createRestrictionSpec name (ctor: 'a -> #YANGTypeRestriction) (argParser: Sc
 /// and assignes the next one.
 let checkNewEnumValue (node: YANGTypeRef) (enumValue: YANGEnumValue) =
     let currentValues =
-        match node.AdditionalProperties.TryGetValue("enum-values") with
-        | (true, l) -> l :?> seq<YANGEnumValue>
+        match node.GetProperty(YANGTypeProperties.EnumValues) with
+        | Some l -> l :> seq<YANGEnumValue>
         | _ -> Seq.empty
     
     let mutable computedValue = None
@@ -267,16 +277,16 @@ let ptype : StatementSpec<YANGTypeRef> =
         typeRef
         (anyOf [
             property "fraction-digits" uint Optional (fun node digits _ ->
-                node.AdditionalProperties.Add("fraction-digits", int digits)
+                node.SetProperty(YANGTypeProperties.FractionDigits, int digits)
                 Ok()
             );
 
             child penum Many (fun node enumValue _ ->
                 match checkNewEnumValue node enumValue with
                 | Ok() ->
-                    match node.AdditionalProperties.TryGetValue("enum-values") with
-                    | (true, l) -> (l :?> IList<YANGEnumValue>).Add(enumValue)
-                    | _ -> node.AdditionalProperties.Add("enum-values", ResizeArray([ enumValue ]))
+                    match node.GetProperty(YANGTypeProperties.EnumValues) with
+                    | Some l -> l.Add(enumValue)
+                    | _ -> node.SetProperty(YANGTypeProperties.EnumValues, ResizeArray([ enumValue ]) :> IList<_>)
                     Ok()
                 | Error(l) -> Error(l)
             );

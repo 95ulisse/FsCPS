@@ -255,6 +255,17 @@ and YANGPatternRestriction(r: Regex) =
             false
 
 
+/// Option that can be set on a YANG type.
+and YANGTypeProperty<'T> internal (name: string) =
+    member val Name = name
+
+
+/// Static class containing all the known options for YANG types.
+and [<AbstractClass; Sealed>] YANGTypeProperties private () =
+    static member val FractionDigits = YANGTypeProperty<int>("fraction-digits")
+    static member val EnumValues = YANGTypeProperty<IList<YANGEnumValue>>("enum-values")
+
+
 /// One possible value for a YANG enum type.
 and YANGEnumValue(name: string) =
     inherit YANGNode()
@@ -330,13 +341,16 @@ and YANGType(name: YANGName) =
 
     member val Restrictions = ResizeArray<YANGTypeRestriction>()
 
-    member this.SetProperty(name, value: #obj) =
-        _properties.Add(name, value)
+    member this.SetProperty<'T>(prop: YANGTypeProperty<'T>, value: 'T) =
+        _properties.Add(prop.Name, value)
 
-    member this.GetProperty<'T>(name) =
-        match _properties.TryGetValue(name), this.BaseType with
+    member internal this.SetProperty(prop: string, value: obj) =
+        _properties.Add(prop, value)
+
+    member this.GetProperty<'T>(prop: YANGTypeProperty<'T>) =
+        match _properties.TryGetValue(prop.Name), this.BaseType with
         | (true, value), _ -> Some(value :?> 'T)
-        | _, Some(b) -> b.GetProperty(name)
+        | _, Some(b) -> b.GetProperty(prop)
         | _, None -> None
 
     abstract member CanBeRestrictedWith: YANGTypeRestriction -> bool
@@ -388,7 +402,7 @@ and YANGPrimitiveTypes private () =
     static member internal AllEnumValues(t: YANGType) =
         let rec allValues (t: YANGType) =
             seq {
-                match t.GetProperty<IList<YANGEnumValue>>("enum-values") with
+                match t.GetProperty(YANGTypeProperties.EnumValues) with
                 | Some l -> yield! l
                 | None -> ()
                 match t.BaseType with
@@ -473,7 +487,7 @@ and YANGPrimitiveTypes private () =
 
             override this.ParseCore(actualType, str) =
                 let digits =
-                    match actualType.GetProperty<int>("fraction-digits") with
+                    match actualType.GetProperty(YANGTypeProperties.FractionDigits) with
                     | Some(d) when d >= 1 && d <= 18 -> d
                     | _ -> invalidArg "fraction-digits" "Invalid value for required property \"fraction-digits\": allowed values are from 0 to 18."
 
@@ -511,7 +525,7 @@ and YANGPrimitiveTypes private () =
 
             override this.SerializeCore(actualType, o) =
                 let digits =
-                    match actualType.GetProperty<int>("fraction-digits") with
+                    match actualType.GetProperty(YANGTypeProperties.FractionDigits) with
                     | Some(d) when d >= 1 && d <= 18 -> d
                     | _ -> invalidArg "fraction-digits" "Invalid value for required property \"fraction-digits\": allowed values are from 0 to 18."
                 
@@ -532,7 +546,7 @@ and YANGPrimitiveTypes private () =
                 r :? YANGRangeRestriction
 
             override this.CheckRequiredPropertiesCore(actualType) =
-                match actualType.GetProperty<int>("fraction-digits") with
+                match actualType.GetProperty(YANGTypeProperties.FractionDigits) with
                     | Some(d) when d >= 1 && d <= 18 -> Ok()
                     | Some _ -> Error([ ArgumentParserError(actualType.OriginalStatement.Value, "Invalid value for required property \"fraction-digits\": allowed values are from 0 to 18.") ])
                     | None -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "fraction-digits") ])
@@ -638,7 +652,7 @@ and YANGPrimitiveTypes private () =
                 false
 
             override this.CheckRequiredPropertiesCore(actualType) =
-                match actualType.GetProperty<IList<YANGEnumValue>>("enum-values") with
+                match actualType.GetProperty(YANGTypeProperties.EnumValues) with
                 | Some l when l.Count > 0 -> Ok()
                 | _ -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "enum") ])
 

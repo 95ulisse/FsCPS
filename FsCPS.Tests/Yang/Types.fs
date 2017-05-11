@@ -74,7 +74,7 @@ module Decimal64 =
                     { Namespace = YANGNamespace.Default; Name = "test-decimal64" },
                     BaseType = Some YANGPrimitiveTypes.Decimal64
                 )
-        t.SetProperty("fraction-digits", digits)
+        t.SetProperty(YANGTypeProperties.FractionDigits, digits)
         t
 
     let isInDecimal64Range (FractionDigits digits) n =
@@ -87,7 +87,7 @@ module Decimal64 =
         let t = makeDecimal64TypeNoDigits()
         Assert.Throws<ArgumentException>(fun () -> t.Parse("1.0") |> ignore) |> ignore
         Assert.Throws<ArgumentException>(fun () -> t.Serialize(1.0) |> ignore) |> ignore
-        t.SetProperty("fraction-digits", 1)
+        t.SetProperty(YANGTypeProperties.FractionDigits, 1)
         t.Parse("1.0") |> ignore
         t.Serialize(1.0) |> ignore
 
@@ -95,7 +95,7 @@ module Decimal64 =
     [<Property>]
     let ``Requires fraction-digits to be between 1 and 18`` (digits: int) =
         let t = makeDecimal64TypeNoDigits()
-        t.SetProperty("fraction-digits", digits)
+        t.SetProperty(YANGTypeProperties.FractionDigits, digits)
         if digits >= 1 && digits <= 18 then
             t.Parse("1.0").IsSome
         else
@@ -200,7 +200,7 @@ module Enumeration =
             let t = (m.ExportedTypes.Values |> Seq.head)
             Assert.Equal("my-type", t.Name.Name)
             
-            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            let values = t.GetProperty(YANGTypeProperties.EnumValues).Value
             Assert.Equal(3, values.Count)
             Assert.Equal("a", values.[0].Name)
             Assert.Equal(0, values.[0].Value.Value)
@@ -230,7 +230,7 @@ module Enumeration =
             let t = (m.ExportedTypes.Values |> Seq.head)
             Assert.Equal("my-type", t.Name.Name)
             
-            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            let values = t.GetProperty(YANGTypeProperties.EnumValues).Value
             Assert.Equal(4, values.Count)
             Assert.Equal("a", values.[0].Name)
             Assert.Equal(-10, values.[0].Value.Value)
@@ -308,7 +308,7 @@ module Enumeration =
             let t = (m.ExportedTypes.Values |> Seq.head)
             Assert.Equal("my-type", t.Name.Name)
             
-            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            let values = t.GetProperty(YANGTypeProperties.EnumValues).Value
             Assert.Equal(3, values.Count)
             Assert.Equal("a", values.[0].Name)
             Assert.Equal(10, values.[0].Value.Value)
@@ -320,7 +320,7 @@ module Enumeration =
             let t = (m.ExportedTypes.Values |> Seq.skip 1 |> Seq.head)
             Assert.Equal("my-type2", t.Name.Name)
             
-            let values = t.GetProperty<IList<YANGEnumValue>>("enum-values").Value
+            let values = t.GetProperty(YANGTypeProperties.EnumValues).Value
             Assert.Equal(1, values.Count)
             Assert.Equal("d", values.[0].Name)
             Assert.Equal(13, values.[0].Value.Value)
