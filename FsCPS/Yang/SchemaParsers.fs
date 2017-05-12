@@ -150,8 +150,10 @@ type YANGTypeRef(t: YANGType) =
     member val Value = t with get, set
     member val AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
 
-    member this.ToNewType(name) =
-        this.MergeInto(YANGType(name))
+    member this.ToNewType(name, statement) =
+        let newType = YANGType(name, OriginalStatement = Some statement)
+        this.MergeInto(newType)
+        |>> (fun _ -> newType)
 
     member this.MergeInto(t: YANGType) =
         t.BaseType <- Some this.Value
@@ -212,7 +214,7 @@ let checkNewEnumValue (node: YANGTypeRef) (enumValue: YANGEnumValue) =
     
     let mutable computedValue = None
     let mutable result = Ok()
-    Seq.append currentValues (YANGPrimitiveTypes.AllEnumValues node.Value)
+    Seq.append currentValues (YANGPrimitiveTypes.AllValues node.Value YANGTypeProperties.EnumValues)
     |> Seq.forall (fun v ->
         if v.Name = enumValue.Name then
             result <- Error([ DuplicateEnumName(enumValue) ])
@@ -270,7 +272,8 @@ let penum : StatementSpec<YANGEnumValue> =
             );
         ])
 
-let ptype : StatementSpec<YANGTypeRef> =
+let ptype, ptypeRef : StatementSpec<YANGTypeRef> * _ = createSpecForwaredToRef "type" Required
+ptypeRef :=
     createSpec
         "type"
         YANGTypeRef
@@ -289,6 +292,15 @@ let ptype : StatementSpec<YANGTypeRef> =
                     | _ -> node.SetProperty(YANGTypeProperties.EnumValues, ResizeArray([ enumValue ]) :> IList<_>)
                     Ok()
                 | Error(l) -> Error(l)
+            );
+
+            child ptype Many (fun node unionMember _ ->
+                unionMember.ToNewType(unionMember.Value.Name, unionMember.OriginalStatement.Value)
+                |>> (fun t ->
+                    match node.GetProperty(YANGTypeProperties.UnionMembers) with
+                    | Some l  -> l.Add(t)
+                    | _ -> node.SetProperty(YANGTypeProperties.UnionMembers, ResizeArray([ t ]) :> IList<_>)
+                )
             );
 
             chld prangeRestriction   Optional <@ fun x -> x.AdditionalRestrictions @>;
@@ -369,7 +381,10 @@ pleafRef :=
             property "default" any     Optional (fun x value _ -> x.Default <- value; Ok());
             prop               any     Optional <@ fun x -> x.Units @>;
             prop               boolean Optional <@ fun x -> x.Mandatory @>;
-            child ptype Required (fun node value _ -> value.ToNewType(value.Value.Name));
+            child ptype Required (fun node value _ ->
+                value.ToNewType(value.Value.Name, node.OriginalStatement.Value)
+                |>> (fun t -> node.Type <- t)
+            );
 
             // Common properties for data nodes
             prop any     Optional <@ fun x -> x.Description @>;
@@ -406,7 +421,10 @@ pleaflistRef :=
             prop positiveIntOrUnbounded Optional <@ fun x -> x.MaxElements @>
             prop orderedBy              Optional <@ fun x -> x.OrderedBy @>;
             prop any                    Optional <@ fun x -> x.Units @>;
-            child ptype Required (fun node value _ -> value.ToNewType(value.Value.Name));
+            child ptype Required (fun node value _ ->
+                value.ToNewType(value.Value.Name, node.OriginalStatement.Value)
+                |>> (fun t -> node.Type <- t)
+            );
 
             // Common properties for data nodes
             prop any     Optional <@ fun x -> x.Description @>;

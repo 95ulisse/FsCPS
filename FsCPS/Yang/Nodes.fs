@@ -264,6 +264,7 @@ and YANGTypeProperty<'T> internal (name: string) =
 and [<AbstractClass; Sealed>] YANGTypeProperties private () =
     static member val FractionDigits = YANGTypeProperty<int>("fraction-digits")
     static member val EnumValues = YANGTypeProperty<IList<YANGEnumValue>>("enum-values")
+    static member val UnionMembers = YANGTypeProperty<IList<YANGType>>("union-members")
 
 
 /// One possible value for a YANG enum type.
@@ -294,6 +295,12 @@ and YANGType(name: YANGName) =
     
     member val BaseType: YANGType option = None with get, set
     
+    member this.PrimitiveType
+        with get() =
+            match this.BaseType with
+            | None -> this
+            | Some b -> b.PrimitiveType
+
     member this.Default
         with get() =
             match _default, this.BaseType with
@@ -398,21 +405,8 @@ and YANGType(name: YANGName) =
 
 /// Static class with all the primitive types defined by YANG.
 and YANGPrimitiveTypes private () =
-
-    static member internal AllEnumValues(t: YANGType) =
-        let rec allValues (t: YANGType) =
-            seq {
-                match t.GetProperty(YANGTypeProperties.EnumValues) with
-                | Some l -> yield! l
-                | None -> ()
-                match t.BaseType with
-                | Some b -> yield! allValues b
-                | None -> ()
-            }
-        allValues t
     
-    static member private MakeIntegralType<'T> name (tryParse: string -> bool * 'T) =
-
+    static let makeIntegralType name (tryParse: string -> bool * 'a) =
         {
             new YANGType({ Namespace = YANGNamespace.Default; Name = name }) with
 
@@ -435,7 +429,22 @@ and YANGPrimitiveTypes private () =
 
         }
 
-    static member Empty = {
+    static let allValues (t: YANGType) (prop: YANGTypeProperty<IList<_>>) =
+        let rec allValues (t: YANGType) =
+            seq {
+                match t.GetProperty(prop) with
+                | Some l -> yield! l
+                | None -> ()
+                match t.BaseType with
+                | Some b -> yield! allValues b
+                | None -> ()
+            }
+        allValues t
+
+    static member internal AllValues t prop =
+        allValues t prop
+
+    static member val Empty = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "empty" }) with
 
             override this.ParseCore(_, _) =
@@ -449,7 +458,7 @@ and YANGPrimitiveTypes private () =
 
     }
 
-    static member Boolean = {
+    static member val Boolean = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "boolean" }) with
 
             override this.ParseCore(_, str) =
@@ -473,16 +482,16 @@ and YANGPrimitiveTypes private () =
 
     }
 
-    static member Int8 = YANGPrimitiveTypes.MakeIntegralType "int8" System.SByte.TryParse
-    static member Int16 = YANGPrimitiveTypes.MakeIntegralType "int16" System.Int16.TryParse
-    static member Int32 = YANGPrimitiveTypes.MakeIntegralType "int32" System.Int32.TryParse
-    static member Int64 = YANGPrimitiveTypes.MakeIntegralType "int64" System.Int64.TryParse
-    static member UInt8 = YANGPrimitiveTypes.MakeIntegralType "uint8" System.Byte.TryParse
-    static member UInt16 = YANGPrimitiveTypes.MakeIntegralType "uint16" System.UInt16.TryParse
-    static member UInt32 = YANGPrimitiveTypes.MakeIntegralType "uint32" System.UInt32.TryParse
-    static member UInt64 = YANGPrimitiveTypes.MakeIntegralType "uint64" System.UInt64.TryParse
+    static member val Int8 = makeIntegralType "int8" System.SByte.TryParse
+    static member val Int16 = makeIntegralType "int16" System.Int16.TryParse
+    static member val Int32 = makeIntegralType "int32" System.Int32.TryParse
+    static member val Int64 = makeIntegralType "int64" System.Int64.TryParse
+    static member val UInt8 = makeIntegralType "uint8" System.Byte.TryParse
+    static member val UInt16 = makeIntegralType "uint16" System.UInt16.TryParse
+    static member val UInt32 = makeIntegralType "uint32" System.UInt32.TryParse
+    static member val UInt64 = makeIntegralType "uint64" System.UInt64.TryParse
 
-    static member Decimal64 = {
+    static member val Decimal64 = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "decimal64" }) with
 
             override this.ParseCore(actualType, str) =
@@ -553,7 +562,7 @@ and YANGPrimitiveTypes private () =
 
     }
 
-    static member String = {
+    static member val String = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "string" }) with
 
             override this.ParseCore(_, str) =
@@ -573,7 +582,7 @@ and YANGPrimitiveTypes private () =
 
     }
 
-    static member Binary = {
+    static member val Binary = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "string" }) with
 
             override this.ParseCore(_, str) =
@@ -596,14 +605,14 @@ and YANGPrimitiveTypes private () =
 
     }
 
-    static member Enumeration = {
+    static member val Enumeration = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "enumeration" }) with
 
             override this.ParseCore(actualType, str) =
                 if isNull str then
                     None
                 else
-                    YANGPrimitiveTypes.AllEnumValues(actualType)
+                    allValues actualType YANGTypeProperties.EnumValues
                     |> Seq.tryPick (fun v ->
                         if v.Name = str then
                             Some(v :> obj)
@@ -644,7 +653,7 @@ and YANGPrimitiveTypes private () =
                 
                 chooser
                 |> Option.bind (fun chooser ->
-                    YANGPrimitiveTypes.AllEnumValues(actualType)
+                    allValues actualType YANGTypeProperties.EnumValues
                     |> Seq.tryPick chooser
                 )
 
@@ -655,6 +664,45 @@ and YANGPrimitiveTypes private () =
                 match actualType.GetProperty(YANGTypeProperties.EnumValues) with
                 | Some l when l.Count > 0 -> Ok()
                 | _ -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "enum") ])
+
+    }
+
+    static member val Union = {
+        new YANGType({ Namespace = YANGNamespace.Default; Name = "union" }) with
+
+            override this.ParseCore(actualType, str) =
+                if isNull str then
+                    None
+                else
+                    allValues actualType YANGTypeProperties.UnionMembers
+                    |> Seq.tryPick (fun t -> t.Parse(str))
+
+            override this.SerializeCore(actualType, str) =
+                if isNull str then
+                    None
+                else
+                    allValues actualType YANGTypeProperties.UnionMembers
+                    |> Seq.tryPick (fun t -> t.Serialize(str))
+
+            override this.CanBeRestrictedWith _ =
+                false
+
+            override this.CheckRequiredPropertiesCore(actualType) =
+                match actualType.GetProperty(YANGTypeProperties.UnionMembers) with
+                | Some l when l.Count > 0 ->
+                    
+                    // Unions cannot have members of type empty
+                    l |> Seq.tryPick (fun t ->
+                        if Object.ReferenceEquals(t.PrimitiveType, YANGPrimitiveTypes.Empty) then
+                            Some t
+                        else
+                            None
+                    )
+                    |> function
+                       | Some t -> Error([ UnexpectedStatement(t.OriginalStatement.Value) ])
+                       | None -> Ok()
+
+                | _ -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "type") ])
 
     }
 
@@ -674,6 +722,7 @@ and YANGPrimitiveTypes private () =
         | "binary" -> Some(YANGPrimitiveTypes.Binary)
         | "decimal64" -> Some(YANGPrimitiveTypes.Decimal64)
         | "enumeration" -> Some(YANGPrimitiveTypes.Enumeration)
+        | "union" -> Some(YANGPrimitiveTypes.Union)
         | _ -> None
         
 

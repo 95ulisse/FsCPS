@@ -326,3 +326,134 @@ module Enumeration =
             Assert.Equal(13, values.[0].Value.Value)
 
         | _ -> raise (XunitException "Should have parsed.")
+
+
+module Unions =
+    
+    [<Fact>]
+    let ``Unions require a type directive`` () =
+        let m =
+            Utils.CreateModule """
+                typedef test-type {
+                    type union;
+                }
+            """
+        match m with
+        | Error [ MissingRequiredStatement(_, "type") ] -> ()
+        | _ -> raise (XunitException "Should have not parsed.")
+
+    [<Fact>]
+    let ``Unions accept values for any of the inner types`` () =
+        let m =
+            Utils.CreateModule """
+                typedef test-type {
+                    type union {
+                        type int32;
+                        type enumeration {
+                            enum "unbounded";
+                        }
+                    }
+                }
+            """
+        match m with
+        | Ok m ->
+
+            let t = (m.ExportedTypes.Values |> Seq.head)
+            Assert.Equal("test-type", t.Name.Name)
+
+            let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
+            Assert.Equal(2, members.Count)
+            Assert.Equal("int32", members.[0].Name.Name)
+            Assert.Equal("enumeration", members.[1].Name.Name)
+
+            // Should accept both an int32 and the string "unbounded"
+            Assert.True(t.Parse("123").IsSome)
+            Assert.True(t.Parse("unbounded").IsSome)
+
+            // Other strings or decimals should not be accepted
+            Assert.True(t.Parse("1.0").IsNone)
+            Assert.True(t.Parse("other").IsNone)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``Unions match types in the same order they are defined`` () =
+        let m =
+            Utils.CreateModule """
+                typedef test-type {
+                    type union {
+                        type enumeration {
+                            enum "never-matched";
+                        }
+                        type int64;
+                        type int32;
+                    }
+                }
+            """
+        match m with
+        | Ok m ->
+            
+            let t = m.ExportedTypes.Values |> Seq.head
+            Assert.Equal("test-type", t.Name.Name)
+
+            let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
+            Assert.Equal(3, members.Count)
+            Assert.Equal("enumeration", members.[0].Name.Name)
+            Assert.Equal("int64", members.[1].Name.Name)
+            Assert.Equal("int32", members.[2].Name.Name)
+
+            Assert.IsType<int64>(t.Parse("1").Value)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``Unions do not inherit descriptions from the members they are made of`` () =
+        let m =
+            Utils.CreateModule """
+                typedef my-int {
+                    type int32;
+                    description "desc";
+                    reference "ref";
+                    units "units";
+                    default 42;
+                }
+                typedef test-type {
+                    type union {
+                        type my-int;
+                    }
+                }
+            """
+        match m with
+        | Ok m ->
+
+            let t = m.ExportedTypes.Values |> Seq.last
+            Assert.Equal("test-type", t.Name.Name)
+
+            let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
+            Assert.Equal(1, members.Count)
+            Assert.Equal("my-int", members.[0].Name.Name)
+            Assert.NotNull(members.[0].Description)
+            Assert.NotNull(members.[0].Reference)
+            Assert.NotNull(members.[0].Units)
+            Assert.NotNull(members.[0].Default)
+
+            Assert.Null(t.Description)
+            Assert.Null(t.Reference)
+            Assert.Null(t.Units)
+            Assert.Null(t.Default)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``Unions cannot have members of type empty`` () =
+        let m =
+            Utils.CreateModule """
+                typedef test-type {
+                    type union {
+                        type empty;
+                    }
+                }
+            """
+        match m with
+        | Error _ -> ()
+        | _ -> raise (XunitException "Should have not parsed.")
