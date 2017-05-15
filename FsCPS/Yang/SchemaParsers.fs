@@ -7,7 +7,6 @@ open System.Text
 open System.Text.RegularExpressions
 open FsCPS
 open FsCPS.Yang.Combinators
-open FsCPS.Yang.Model
 
 #nowarn "58" // Indentation
 
@@ -83,14 +82,11 @@ let identifier : SchemaParser<YANGName> =
         | Error(l) -> Error(l)
 
 /// Argument parser for a reference to a type.
-let typeRef : SchemaParser<YANGType> =
+let typeRef : SchemaParser<_> =
     fun ctx ->
         match arg StatementParsers.ref ctx with
+        | Ok((prefix, name)) ->  Ok(None, prefix, name, ctx.Scope)
         | Error(l) -> Error(l)
-        | Ok((prefix, name)) -> 
-            match ctx.ResolveTypeRef(prefix, name) with
-            | Some(t) -> Ok(t)
-            | None -> Error([ UnresolvedTypeRef(ctx.Statement, ctx.Statement.Argument.Value) ])
 
 /// Argument parser for a Uri.
 let uri : SchemaParser<Uri> =
@@ -142,40 +138,14 @@ let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
 // Helper types
 // ------------------------------------------------------------------
 
-type YANGTypeRef(t: YANGType) =
-    inherit YANGNode()
-
-    let _additionalProperties = Dictionary<string, obj>()
-
-    member val Value = t with get, set
-    member val AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
-
-    member this.ToNewType(name, statement) =
-        let newType = YANGType(name, OriginalStatement = Some statement)
-        this.MergeInto(newType)
-        |>> (fun _ -> newType)
-
-    member this.MergeInto(t: YANGType) =
-        t.BaseType <- Some this.Value
-        t.Restrictions.AddRange(this.AdditionalRestrictions)
-        _additionalProperties |> Seq.iter (fun pair -> t.SetProperty(pair.Key, pair.Value))
-                
-        // Check that the required properties have been provided
-        t.CheckRequiredProperties()
-
-    member this.SetProperty<'T>(prop: YANGTypeProperty<'T>, value: 'T) =
-        _additionalProperties.Add(prop.Name, value)
-
-    member this.GetProperty<'T>(prop: YANGTypeProperty<'T>) =
-        match _additionalProperties.TryGetValue(prop.Name) with
-        | (true, x) -> Some(x :?> 'T)
-        | _ -> None
-
 type YANGImport(moduleName: string) =
     inherit YANGNode()
     member val ModuleName = moduleName
     member val Prefix: string = null with get, set
     member val RevisionDate: DateTime option = None with get, set
+
+    override this.EnsureRefs() =
+        Ok()
 
 
 
@@ -193,51 +163,6 @@ let createRestrictionSpec name (ctor: 'a -> #YANGTypeRestriction) (argParser: Sc
         prop any Optional <@ fun x -> x.ErrorMessage @>;
         prop any Optional <@ fun x -> x.Reference @>;
     ])
-
-    // Before returning the restriction, check that the enclosing type supports it
-    >=> (fun r ctx ->
-        let t = ctx.Scope.ParentNode :?> YANGTypeRef
-        if t.Value.CanBeRestrictedWith(r) then
-            Ok(r)
-        else
-            Error([ InvalidTypeRestriction(r.OriginalStatement.Value, t.Value) ])
-    )
-
-/// Checks if an enum value is valid: checks the uniqueness of the name
-/// and of the value. If the value has not been provided, it automatically computes
-/// and assignes the next one.
-let checkNewEnumValue (node: YANGTypeRef) (enumValue: YANGEnumValue) =
-    let currentValues =
-        match node.GetProperty(YANGTypeProperties.EnumValues) with
-        | Some l -> l :> seq<YANGEnumValue>
-        | _ -> Seq.empty
-    
-    let mutable computedValue = None
-    let mutable result = Ok()
-    Seq.append currentValues (YANGPrimitiveTypes.AllValues node.Value YANGTypeProperties.EnumValues)
-    |> Seq.forall (fun v ->
-        if v.Name = enumValue.Name then
-            result <- Error([ DuplicateEnumName(enumValue) ])
-            false
-        else if enumValue.Value.IsSome && enumValue.Value.Value = v.Value.Value then
-            result <- Error([ DuplicateEnumValue(enumValue) ])
-            false
-        else
-            computedValue <-
-                match computedValue with
-                | Some(c) -> Some(max c v.Value.Value)
-                | None -> Some(v.Value.Value)
-            true
-    ) |> ignore
-
-    match enumValue.Value, computedValue with
-    | Some _, _ -> ()
-    | None, Some c -> enumValue.Value <- Some(c + 1)
-    | None, None -> enumValue.Value <- Some(0)
-
-    result
-
-
 
 let prangeRestriction : StatementSpec<YANGRangeRestriction> =
     createRestrictionSpec
@@ -285,22 +210,17 @@ ptypeRef :=
             );
 
             child penum Many (fun node enumValue _ ->
-                match checkNewEnumValue node enumValue with
-                | Ok() ->
-                    match node.GetProperty(YANGTypeProperties.EnumValues) with
-                    | Some l -> l.Add(enumValue)
-                    | _ -> node.SetProperty(YANGTypeProperties.EnumValues, ResizeArray([ enumValue ]) :> IList<_>)
-                    Ok()
-                | Error(l) -> Error(l)
+                match node.GetProperty(YANGTypeProperties.EnumValues) with
+                | Some l -> l.Add(enumValue)
+                | _ -> node.SetProperty(YANGTypeProperties.EnumValues, ResizeArray([ enumValue ]) :> IList<_>)
+                Ok()
             );
 
             child ptype Many (fun node unionMember _ ->
-                unionMember.ToNewType(unionMember.Value.Name, unionMember.OriginalStatement.Value)
-                |>> (fun t ->
-                    match node.GetProperty(YANGTypeProperties.UnionMembers) with
-                    | Some l  -> l.Add(t)
-                    | _ -> node.SetProperty(YANGTypeProperties.UnionMembers, ResizeArray([ t ]) :> IList<_>)
-                )
+                match node.GetProperty(YANGTypeProperties.UnionMembers) with
+                | Some l  -> l.Add(unionMember)
+                | _ -> node.SetProperty(YANGTypeProperties.UnionMembers, ResizeArray([ unionMember ]) :> IList<_>)
+                Ok()
             );
 
             chld prangeRestriction   Optional <@ fun x -> x.AdditionalRestrictions @>;
@@ -314,7 +234,10 @@ let ptypedef : StatementSpec<YANGType> =
         YANGType
         identifier
         (anyOf [
-            child ptype Required (fun node value _ -> value.MergeInto(node));
+            child ptype Required (fun node value _ ->
+                node.BaseType <- Some value
+                Ok()
+            );
 
             property "default" any    Optional (fun x value _ -> x.Default <- value; Ok());
             prop               any    Optional <@ fun x -> x.Description @>;
@@ -323,19 +246,9 @@ let ptypedef : StatementSpec<YANGType> =
             prop               any    Optional <@ fun x -> x.Units @>;
         ])
 
-    // If a default value has been provided, check that it's valid
-    >=> (fun t ctx ->
-        if not (isNull t.Default) then
-            match t.IsValid(t.Default) with
-            | Ok _ -> Ok(t)
-            | Error(restriction) -> Error([ InvalidDefault(t, restriction) ])
-        else
-            Ok(t)
-    )
-
     // Registers the new type in the context automatically
     >=> (fun t ctx ->
-        ctx.RegisterType(t)
+        ctx.Scope.RegisterType(t)
         |> Result.map (fun _ -> t)
     )
 
@@ -381,26 +294,13 @@ pleafRef :=
             property "default" any     Optional (fun x value _ -> x.Default <- value; Ok());
             prop               any     Optional <@ fun x -> x.Units @>;
             prop               boolean Optional <@ fun x -> x.Mandatory @>;
-            child ptype Required (fun node value _ ->
-                value.ToNewType(value.Value.Name, node.OriginalStatement.Value)
-                |>> (fun t -> node.Type <- t)
-            );
+            child ptype Required (fun node value _ -> node.Type <- value; Ok());
 
             // Common properties for data nodes
             prop any     Optional <@ fun x -> x.Description @>;
             prop any     Optional <@ fun x -> x.Reference @>;
             prop status  Optional <@ fun x -> x.Status @>;
         ])
-
-    // If a default value has been provided, check that it's valid
-    >=> (fun leaf ctx ->
-        if not (isNull leaf.Default) then
-            match leaf.Type.IsValid(leaf.Default) with
-            | Ok _ -> Ok(leaf)
-            | Error(restriction) -> Error([ InvalidLeafDefault(leaf, restriction) ])
-        else
-            Ok(leaf)
-    )
 
     // Mandatory leafs cannot have a default value
     >=> (fun leaf ctx ->
@@ -421,10 +321,7 @@ pleaflistRef :=
             prop positiveIntOrUnbounded Optional <@ fun x -> x.MaxElements @>
             prop orderedBy              Optional <@ fun x -> x.OrderedBy @>;
             prop any                    Optional <@ fun x -> x.Units @>;
-            child ptype Required (fun node value _ ->
-                value.ToNewType(value.Value.Name, node.OriginalStatement.Value)
-                |>> (fun t -> node.Type <- t)
-            );
+            child ptype Required (fun node value _ -> node.Type <- value; Ok());
 
             // Common properties for data nodes
             prop any     Optional <@ fun x -> x.Description @>;
@@ -489,7 +386,7 @@ let pimport : StatementSpec<_> =
 
     // Import the contents of the module in the current context
     >=> (fun (import, m) ctx ->
-        ctx.RegisterImportedModule(m, import.Prefix)
+        ctx.Scope.RegisterImportedModule(m, import.Prefix)
     )
 
 let pmodule : StatementSpec<YANGModule> =

@@ -9,7 +9,6 @@ open FsCheck
 open FsCheck.Xunit
 open FsCPS
 open FsCPS.Yang
-open FsCPS.Yang.Model
 open FsCPS.Tests
 open FsCPS.Tests.Utils
 
@@ -66,13 +65,13 @@ module Decimal64 =
     let makeDecimal64TypeNoDigits() =
         YANGType(
             { Namespace = YANGNamespace.Default; Name = "test-decimal64" },
-            BaseType = Some YANGPrimitiveTypes.Decimal64
+            BaseType = Some (YANGTypeRef.FromExistingType(YANGPrimitiveTypes.Decimal64))
         )
 
     let makeDecimal64Type (FractionDigits digits) =
         let t = YANGType(
                     { Namespace = YANGNamespace.Default; Name = "test-decimal64" },
-                    BaseType = Some YANGPrimitiveTypes.Decimal64
+                    BaseType = Some (YANGTypeRef.FromExistingType(YANGPrimitiveTypes.Decimal64))
                 )
         t.SetProperty(YANGTypeProperties.FractionDigits, digits)
         t
@@ -363,8 +362,8 @@ module Unions =
 
             let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
             Assert.Equal(2, members.Count)
-            Assert.Equal("int32", members.[0].Name.Name)
-            Assert.Equal("enumeration", members.[1].Name.Name)
+            Assert.Equal("int32", members.[0].ResolvedType.Name.Name)
+            Assert.Equal("enumeration", members.[1].ResolvedType.Name.Name)
 
             // Should accept both an int32 and the string "unbounded"
             Assert.True(t.Parse("123").IsSome)
@@ -398,9 +397,9 @@ module Unions =
 
             let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
             Assert.Equal(3, members.Count)
-            Assert.Equal("enumeration", members.[0].Name.Name)
-            Assert.Equal("int64", members.[1].Name.Name)
-            Assert.Equal("int32", members.[2].Name.Name)
+            Assert.Equal("enumeration", members.[0].ResolvedType.Name.Name)
+            Assert.Equal("int64", members.[1].ResolvedType.Name.Name)
+            Assert.Equal("int32", members.[2].ResolvedType.Name.Name)
 
             Assert.IsType<int64>(t.Parse("1").Value)
 
@@ -431,11 +430,11 @@ module Unions =
 
             let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
             Assert.Equal(1, members.Count)
-            Assert.Equal("my-int", members.[0].Name.Name)
-            Assert.NotNull(members.[0].Description)
-            Assert.NotNull(members.[0].Reference)
-            Assert.NotNull(members.[0].Units)
-            Assert.NotNull(members.[0].Default)
+            Assert.Equal("my-int", members.[0].ResolvedType.Name.Name)
+            Assert.NotNull(members.[0].ResolvedType.Description)
+            Assert.NotNull(members.[0].ResolvedType.Reference)
+            Assert.NotNull(members.[0].ResolvedType.Units)
+            Assert.NotNull(members.[0].ResolvedType.Default)
 
             Assert.Null(t.Description)
             Assert.Null(t.Reference)
@@ -457,3 +456,93 @@ module Unions =
         match m with
         | Error _ -> ()
         | _ -> raise (XunitException "Should have not parsed.")
+
+
+module ForwardReferences =
+
+    [<Fact>]
+    let ``In the module scope`` () =
+        let m =
+            Utils.CreateModule """
+                typedef test-type {
+                    type union {
+                        type my-int;
+                    }
+                }
+                typedef my-int {
+                    type int32;
+                }
+            """
+        match m with
+        | Ok m ->
+
+            let t = m.ExportedTypes.Values |> Seq.head
+            Assert.Equal("test-type", t.Name.Name)
+            
+            let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
+            Assert.Equal(1, members.Count)
+            Assert.Equal("my-int", members.[0].ResolvedType.Name.Name)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``In a nested scope`` () =
+        let m =
+            Utils.CreateModule """
+                container a {
+                    typedef test-type {
+                        type union {
+                            type my-int;
+                        }
+                    }
+                    typedef my-int {
+                        type int32;
+                    }
+
+                    // The leaf is here just to get a reference to the type
+                    leaf x { type test-type; }
+                }
+            """
+        match m with
+        | Ok m ->
+
+            let t = ((m.DataNodes.[0] :?> YANGContainer).DataNodes.[0] :?> YANGLeaf).Type.ResolvedType
+            Assert.Equal("test-type", t.Name.Name)
+            
+            let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
+            Assert.Equal(1, members.Count)
+            Assert.Equal("my-int", members.[0].ResolvedType.Name.Name)
+
+        | _ -> raise (XunitException "Should have parsed.")
+
+    [<Fact>]
+    let ``In a nested parent scope`` () =
+        let m =
+            Utils.CreateModule """
+                container a {
+                    container b {
+                        typedef test-type {
+                            type union {
+                                type my-int;
+                            }
+                        }
+
+                        // The leaf is here just to get a reference to the type
+                        leaf x { type test-type; }
+                    }
+                    typedef my-int {
+                        type int32;
+                    }
+                }
+            """
+        match m with
+        | Ok m ->
+
+            let t = (((m.DataNodes.[0] :?> YANGContainer).DataNodes.[0] :?> YANGContainer).DataNodes.[0] :?> YANGLeaf).Type.ResolvedType
+            Assert.Equal("test-type", t.Name.Name)
+            
+            let members = t.GetProperty(YANGTypeProperties.UnionMembers).Value
+            Assert.Equal(1, members.Count)
+            Assert.Equal("my-int", members.[0].ResolvedType.Name.Name)
+
+        | _ -> raise (XunitException "Should have parsed.")

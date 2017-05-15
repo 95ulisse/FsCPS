@@ -6,7 +6,6 @@ open System.Text.RegularExpressions
 open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Quotations.Patterns
 open FsCPS
-open FsCPS.Yang.Model
 
 
 /// Discriminated union indicating how many times a statement can be repeated.

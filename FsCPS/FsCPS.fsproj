@@ -59,9 +59,9 @@
     <Compile Include="Native.fs" />
     <Compile Include="Model.fs" />
     <Resource Include="Yang\Models\ietf-yang-types.yang" />
+    <Resource Include="Yang\Models\ietf-inet-types.yang" />
     <Compile Include="Yang\Statements.fs" />
     <Compile Include="Yang\Nodes.fs" />
-    <Compile Include="Yang\Parser.fs" />
     <Compile Include="Yang\Combinators.fs" />
     <Compile Include="Yang\SchemaParsers.fs" />
     <None Include="Examples\IPAddress.fsx" />

@@ -1,24 +1,299 @@
-namespace FsCPS.Yang.Model
+namespace FsCPS.Yang
 
 open System
 open System.Collections.Generic
 open System.Globalization
 open System.IO
+open System.Reflection
+open System.Resources
+open System.Text
 open System.Text.RegularExpressions
 open FsCPS
-open FsCPS.Yang
+
+[<AbstractClass; Sealed>]
+type YANGParser private () =
+
+    // Loads (via reflection) the private property `rootParser` which is added at the end of the file
+    // `SchemaParsers.fs`. This is a HORRIBLE solution to the big circular dependency between all the types.
+    static let rootParser: SchemaParser<YANGModule> =
+        let t = typeof<YANGParser>.Assembly.GetType("FsCPS.Yang.SchemaParsers")
+        let prop = t.GetProperty("rootParser", BindingFlags.Static ||| BindingFlags.NonPublic)
+        prop.GetMethod.Invoke(null, null) :?> SchemaParser<YANGModule>
+
+    static member ParseModule(str: string) =
+        YANGParser.ParseModule(str, YANGParserOptions())
+
+    static member ParseModule(stream: Stream) =
+        YANGParser.ParseModule(stream, YANGParserOptions())
+
+    static member ParseModule(str: string, options) =
+
+        // Parses the string as a tree of statements
+        match FParsec.CharParsers.run StatementParsers.root str with
+        | FParsec.CharParsers.Failure(e, _, _) -> Error([ ParserError(e) ])
+        | FParsec.CharParsers.Success(statement, _, _) ->
+
+            // Transforms the statements to the actual schema tree
+            let ctx = SchemaParserContext(statement, options)
+            rootParser ctx
+
+            // Rescan the AST to check for its consistency
+            >>= (fun m -> m.EnsureRefs() |>> (fun _ -> m))
+
+    static member ParseModule(stream: Stream, options) =
+
+        // Parses the string as a tree of statements
+        match FParsec.CharParsers.runParserOnStream StatementParsers.root () "" stream Encoding.UTF8 with
+        | FParsec.CharParsers.Failure(e, _, _) -> Error([ ParserError(e) ])
+        | FParsec.CharParsers.Success(statement, _, _) ->
+
+            // Transforms the statements to the actual schema tree
+            let ctx = SchemaParserContext(statement, options)
+            rootParser ctx
+
+            // Rescan the AST to check for its consistency
+            >>= (fun m -> m.EnsureRefs() |>> (fun _ -> m))
+
+
+/// Options for the YANG parser.
+and YANGParserOptions() as this =
+
+    static let builtinModules = [
+        "ietf-yang-types";
+        "ietf-inet-types"
+    ]
+
+    let moduleCache = Dictionary<(string * DateTime option), YANGModule>()
+
+    let defaultResolveImport name revision =
+        
+        let checkBuiltin _ =
+            if builtinModules |> List.exists (fun x -> x = name) then
+                let resman = ResourceManager("FsCPS.g", Assembly.GetExecutingAssembly())
+                use stream = resman.GetStream(sprintf "yang/models/%s.yang" (name.ToLowerInvariant()))
+                YANGParser.ParseModule(stream, this)
+            else
+                Error([])
+
+        let findFile _ =
+            // Possible file paths
+            let paths =
+                [
+                    match revision with
+                    | Some d -> yield String.Format("{0}@{1:yyyy-MM-dd}.yang", name, d)
+                    | None -> ()
+                    yield sprintf "%s.yang" name
+                ]
+                |> List.map Path.GetFullPath
+
+            // Check if one of the paths exists
+            match paths |> List.tryFind File.Exists with
+            | None -> Error([ CannotFindModule(name, paths) ])
+            | Some modulePath ->
+
+                // Parse the file contents
+                try
+                    use stream = File.OpenRead modulePath
+                    YANGParser.ParseModule(stream, this)
+                with
+                | :? IOException as e -> Error([ CannotOpenModule(modulePath, e.Message) ])
+
+        let storeModuleInCache (m: YANGModule) =
+            let checkCachedAndReturn() =
+                // We successfully parsed the module, but before returning it,
+                // we have to check that a module with the same name and revision is not in the cache.
+                // The check needs to be done here again because if the user passed no revision,
+                // but the module has already been parsed, we need to return the cached module.
+                let revisionDate = m.Revision |> Option.map (fun x -> x.Date)
+                match moduleCache.TryGetValue((name, revisionDate)) with
+                | (true, cachedModule) -> Ok cachedModule
+                | _ ->
+                    moduleCache.Add((name, revisionDate), m)
+                    Ok m
+
+            // Check that the parsed module has the same revision date if one has been
+            // requested explicitly
+            if revision.IsSome then
+                if m.Revision.IsSome && revision.Value = m.Revision.Value.Date then
+                    checkCachedAndReturn()
+                else
+                    Error([ CannotFindModuleRevision(name, revision.Value) ])
+            else
+                checkCachedAndReturn()
+
+        // If a revision is provided, check if the module is in the cache
+        match moduleCache.TryGetValue((name, revision)) with
+        | (true, m) -> Ok m
+        | _ -> Error()
+        
+        // Otherwise check if it's one of the builtin modules
+        |> Result.bindError checkBuiltin
+
+        // Start looking for a file
+        |> Result.bindError (fun errors ->
+            match errors with
+            | [] -> findFile()
+            | _ -> Error(errors)
+        )
+
+        // If a module has been found and parsed, check that the requested revision (if any) matches,
+        // and then store the module in the cache.
+        |> Result.bind storeModuleInCache
+
+    member val ResolveImport: string -> DateTime option -> SchemaParserResult<YANGModule> = defaultResolveImport with get, set
+
+
+/// Scope of a single statement.
+/// A scope lives only between the children of a statement,
+/// or in other words, a scope begins with a "{" and ends with a "}".
+and internal Scope =
+    {
+        Module: YANGModule;
+        ParentStatement: Statement;
+        ParentNode: YANGNode;
+        Prefixes: Dictionary<string, YANGModule>;
+        Types: Dictionary<YANGName, YANGType>;
+        Parent: Scope option;
+    }
+    with
+
+        /// Returns the type with the given name.
+        member this.GetType(name: YANGName) =
+            let rec f scope =
+                match scope.Types.TryGetValue(name), scope.Parent with
+                | (true, t), _ -> Some(t)
+                | _, Some parent -> f parent
+                | _, None -> None
+            f this
+
+        /// Returns the module registered with the given prefix in the current scope.
+        member this.GetIncludedModule(prefix: string) =
+            let rec f scope =
+                match scope.Prefixes.TryGetValue(prefix), scope.Parent with
+                | (true, m), _ -> Some(m)
+                | _, Some parent -> f parent
+                | _, None -> None
+            f this
+
+        /// Registers a new type in the current scope.
+        /// Returns an error if the new type would shadow an already defined one.
+        member this.RegisterType(t: YANGType) =
+            match YANGPrimitiveTypes.FromName(t.Name.Name) with
+            | Some(shadowedType) -> Error([ ShadowedType(t.OriginalStatement.Value, shadowedType) ])
+            | None ->
+                match this.GetType(t.Name) with
+                | Some(shadowedType) ->
+                    Error([ ShadowedType(t.OriginalStatement.Value, shadowedType) ])
+                | None ->
+                    this.Types.Add(t.Name, t)
+                    Ok()
+
+        /// Resolves a reference to a type.
+        member this.ResolveTypeRef(prefix: string option, name: string) =
+            match prefix, YANGPrimitiveTypes.FromName(name) with
+        
+            // Reference to a primitive type
+            | None, Some(primitiveType) ->
+                Some(primitiveType)
+
+            // We can either have an unprefixed reference, or a prefixed reference that is using
+            // the same prefix of the module we are parsing. In both cases, resolve from the current scope.
+            | None, None ->
+                this.GetType({ Namespace = this.Module.Namespace; Name = name })
+            | Some(p), _ when p = this.Module.Prefix ->
+                this.GetType({ Namespace = this.Module.Namespace; Name = name })
+
+            // We have a prefixed reference, so resolve the module associated to the prefix,
+            // then search between it's exported types
+            | Some(p), _ ->
+                match this.GetIncludedModule(p) with
+                | Some m ->
+                    let fullName = { Namespace = m.Namespace; Name = name }
+                    match (m.ExportedTypes :> Dictionary<_,_>).TryGetValue(fullName) with
+                    | (true, t) -> Some(t)
+                    | _ -> None
+                | None -> None
+
+        /// Registers the given module as available under the given prefix.
+        member this.RegisterImportedModule(m: YANGModule, prefix: string) =
+            match this.GetIncludedModule(prefix) with
+            | Some oldModule ->
+                Error([ AlreadyUsedPrefix(m.OriginalStatement.Value, oldModule.OriginalStatement.Value) ])
+            | None ->
+                this.Prefixes.Add(prefix, m)
+                Ok()
+
+/// Context of the parsing operation.
+/// Contains a pointer to the current statement and other useful informations.
+/// It also implements a stack-like semantics for scopes to aid recursion.
+and internal SchemaParserContext(rootStatement: Statement, options: YANGParserOptions) =
+
+    let _scopeStack = Stack<Scope>()
+
+    /// Parsing options
+    member val Options = options
+
+    /// Root statement from which the parsing started.
+    member val RootStatement: Statement = rootStatement
+
+    /// Current statement that is being parsed.
+    member val Statement = rootStatement with get, set
+
+    /// Current scope.
+    member this.Scope
+        with get() = _scopeStack.Peek()
+
+    /// Pushes a new scope with the given parent statements and node to the stack.
+    member this.PushScope(parentStatement, parentNode: YANGNode) =
+        if parentNode :? YANGModule then
+            _scopeStack.Push(
+                {
+                    Module = parentNode :?> YANGModule;
+                    ParentStatement = parentStatement;
+                    ParentNode = parentNode;
+                    Prefixes = Dictionary<_, _>();
+                    Types = Dictionary<_, _>();
+                    Parent = if _scopeStack.Count = 0 then None else Some (_scopeStack.Peek())
+                }
+            )
+        else
+            _scopeStack.Push(
+                {
+                    this.Scope with
+                        ParentStatement = parentStatement;
+                        ParentNode = parentNode;
+                        Prefixes = Dictionary<_, _>();
+                        Types = Dictionary<_, _>();
+                        Parent = Some this.Scope
+                }
+            )
+
+    /// Pops the last scope from the stack.
+    member __.PopScope() =
+        _scopeStack.Pop()
+
+    /// Resolves an import and compiles the referenced module.
+    member this.ResolveImport(name: string, revision: DateTime option) =
+        this.Options.ResolveImport name revision
+
+
+/// Result of a parser.
+/// It can either be an error or a success, in which case the parsed element is returned.
+and internal SchemaParserResult<'T> = Result<'T, SchemaError list>
+
+
+/// A parser is a function from a parsing context to a result or an error list.
+and internal SchemaParser<'T> = SchemaParserContext -> SchemaParserResult<'T>
 
 
 /// Base class for all YANG nodes
-[<AbstractClass>]
-[<AllowNullLiteral>]
-type YANGNode() =
+and [<AbstractClass; AllowNullLiteral>] YANGNode() =
     member val OriginalStatement: Statement option = None with get, set
+    abstract member EnsureRefs: unit -> SchemaParserResult<unit>
 
 
 /// Base class for a YANG node that carries actual data.
-[<AbstractClass>]
-type YANGDataNode() =
+and [<AbstractClass>] YANGDataNode() =
     inherit YANGNode()
 
 
@@ -27,7 +302,7 @@ type YANGDataNode() =
 /// Note that a node with status `Current` cannot reference any node with status
 /// `Deprecated` or `Obsolete`, as well as a `Deprecated` node cannot reference
 /// an `Obsolete` node.
-type YANGStatus =
+and YANGStatus =
     | Current = 1
     | Deprecated = 2
     | Obsolete = 3
@@ -37,15 +312,14 @@ type YANGStatus =
 /// With `System` the ordering of the elements in the list has no meaning,
 /// while with `User`, the ordering of the children is important and must be respected.
 /// See RFC 6020 section 7.7.1 for other details.
-type YANGListOrderedBy =
+and YANGListOrderedBy =
     | System = 1
     | User = 2
 
 
 /// Representation of all the possible errors that can happen
 /// during the parsing and validation of a YANG model
-[<StructuredFormatDisplay("{Text}")>]
-type SchemaError =
+and [<StructuredFormatDisplay("{Text}")>] SchemaError =
     
     // Generic errors
     | ParserError of string
@@ -175,7 +449,7 @@ and [<StructuredFormatDisplay("{Uri}")>] YANGNamespace =
 
 /// Name of YANGNode.
 /// Names can't be simple strings because they need to be qualified by a namespace.
-and [<StructuredFormatDisplay("{Namespace}{Name}")>] YANGName =
+and [<StructuredFormatDisplay("{Namespace} / {Name}")>] YANGName =
     {
         Namespace: YANGNamespace;
         Name: string;
@@ -197,6 +471,9 @@ and [<AbstractClass>] YANGTypeRestriction() =
     member val Reference: string = null with get, set
 
     abstract member IsValid: obj -> bool
+
+    override this.EnsureRefs() =
+        Ok()
 
 
 /// Restriction on the value of a numeral type.
@@ -264,7 +541,7 @@ and YANGTypeProperty<'T> internal (name: string) =
 and [<AbstractClass; Sealed>] YANGTypeProperties private () =
     static member val FractionDigits = YANGTypeProperty<int>("fraction-digits")
     static member val EnumValues = YANGTypeProperty<IList<YANGEnumValue>>("enum-values")
-    static member val UnionMembers = YANGTypeProperty<IList<YANGType>>("union-members")
+    static member val UnionMembers = YANGTypeProperty<IList<YANGTypeRef>>("union-members")
 
 
 /// One possible value for a YANG enum type.
@@ -276,6 +553,9 @@ and YANGEnumValue(name: string) =
     member val Reference: string = null with get, set
     member val Status = YANGStatus.Current with get, set
     member val Value: int option = None with get, set
+
+    override this.EnsureRefs() =
+        Ok()
 
 
 /// Base class for all YANG data types.
@@ -291,20 +571,77 @@ and YANGType(name: YANGName) =
     let mutable _units: string option = None
     let _properties = Dictionary<string, obj>()
 
+    // Checks that the enum values for the given type are valid: checks the uniqueness of the name
+    // and of the value. If the value has not been provided, it automatically computes
+    // and assignes the next one.
+    let rec checkEnumValuesForType (t: YANGType) : SchemaParserResult<int option * YANGEnumValue list> =
+
+        // Checks the base type
+        match t.BaseType with
+        | None -> Ok (None, [])
+        | Some b -> checkEnumValuesForType (b.ResolvedType)
+
+        >>= (fun (maxValue, baseValues) ->
+
+            let currentValues: YANGEnumValue list =
+                match t.GetProperty(YANGTypeProperties.EnumValues, true) with
+                | Some l -> l |> Seq.toList
+                | _ -> List.empty
+
+            let mutable newMaxValue = maxValue
+            let mutable allValues = baseValues
+
+            // Checks that the new values have unique names and values
+            currentValues |> foldResult (fun _ v ->
+                
+                // Checks that both the name and the value are unique
+                allValues
+                |> foldResult (fun _ oldValue ->
+                    if v.Name = oldValue.Name then
+                        Error([ DuplicateEnumName(v) ])
+                    else if v.Value.IsSome && v.Value.Value = oldValue.Value.Value then
+                        Error([ DuplicateEnumValue(v) ])
+                    else
+                        Ok ()
+                ) ()
+
+                // Assign a new value if not provided
+                |>> (fun () ->
+                    match v.Value, newMaxValue with
+                    | Some vv, _ ->
+                        newMaxValue <- Some (max (defaultArg newMaxValue Int32.MinValue) vv)
+                    | None, Some c ->
+                        v.Value <- Some(c + 1)
+                        newMaxValue <- v.Value
+                    | None, None ->
+                        v.Value <- Some(0)
+                        newMaxValue <- v.Value
+                )
+
+                // Add the accepted value to a list so that the next value (if any)
+                // will be checked against this one too.
+                |>> (fun () -> allValues <- v :: allValues)
+
+            ) ()
+
+            |>> (fun _ -> (newMaxValue, allValues))
+
+        )
+
     member val Name = name
     
-    member val BaseType: YANGType option = None with get, set
+    member val BaseType: YANGTypeRef option = None with get, set
     
     member this.PrimitiveType
         with get() =
             match this.BaseType with
             | None -> this
-            | Some b -> b.PrimitiveType
+            | Some b -> b.ResolvedType.PrimitiveType
 
     member this.Default
         with get() =
             match _default, this.BaseType with
-            | None, Some b -> b.Default
+            | None, Some b -> b.ResolvedType.Default
             | None, None -> null
             | Some v, _ -> v
         and set(v) =
@@ -313,7 +650,7 @@ and YANGType(name: YANGName) =
     member this.Description
         with get() =
             match _description, this.BaseType with
-            | None, Some b -> b.Description
+            | None, Some b -> b.ResolvedType.Description
             | None, None -> null
             | Some v, _ -> v
         and set(v) =
@@ -322,7 +659,7 @@ and YANGType(name: YANGName) =
     member this.Reference
         with get() =
             match _reference, this.BaseType with
-            | None, Some b -> b.Reference
+            | None, Some b -> b.ResolvedType.Reference
             | None, None -> null
             | Some v, _ -> v
         and set(v) =
@@ -331,7 +668,7 @@ and YANGType(name: YANGName) =
     member this.Status
         with get() =
             match _status, this.BaseType with
-            | None, Some b -> b.Status
+            | None, Some b -> b.ResolvedType.Status
             | None, None -> YANGStatus.Current
             | Some v, _ -> v
         and set(v) =
@@ -340,7 +677,7 @@ and YANGType(name: YANGName) =
     member this.Units
         with get() =
             match _units, this.BaseType with
-            | None, Some b -> b.Units
+            | None, Some b -> b.ResolvedType.Units
             | None, None -> null
             | Some v, _ -> v
         and set(v) =
@@ -354,16 +691,19 @@ and YANGType(name: YANGName) =
     member internal this.SetProperty(prop: string, value: obj) =
         _properties.Add(prop, value)
 
-    member this.GetProperty<'T>(prop: YANGTypeProperty<'T>) =
-        match _properties.TryGetValue(prop.Name), this.BaseType with
-        | (true, value), _ -> Some(value :?> 'T)
-        | _, Some(b) -> b.GetProperty(prop)
-        | _, None -> None
+    member this.GetProperty<'T>(prop: YANGTypeProperty<'T>) : 'T option =
+        this.GetProperty(prop, false)
+
+    member internal this.GetProperty<'T>(prop: YANGTypeProperty<'T>, local: bool) : 'T option =
+        match _properties.TryGetValue(prop.Name), this.BaseType, local with
+        | (true, value), _, _ -> Some(value :?> 'T)
+        | _, Some(b), false -> b.GetProperty(prop)
+        | _ -> None
 
     abstract member CanBeRestrictedWith: YANGTypeRestriction -> bool
     default this.CanBeRestrictedWith(r: YANGTypeRestriction) =
         match this.BaseType with
-        | Some(b) -> b.CanBeRestrictedWith(r)
+        | Some(b) -> b.ResolvedType.CanBeRestrictedWith(r)
         | None -> invalidOp (sprintf "Missing restriction filter logic for type %A" this.Name)
 
     member this.IsValid o =
@@ -372,7 +712,7 @@ and YANGType(name: YANGName) =
             |> Seq.tryFind (fun r -> not (r.IsValid o))
         match violatedRestriction, this.BaseType with
         | Some r, _ -> Error r
-        | None, Some b -> b.IsValid o
+        | None, Some b -> b.ResolvedType.IsValid o
         | None, None -> Ok()
     
     member this.Parse str =
@@ -387,20 +727,127 @@ and YANGType(name: YANGName) =
     abstract member ParseCore: YANGType * string -> obj option
     default this.ParseCore(actualType: YANGType, str: string) =
         match this.BaseType with
-        | Some(b) -> b.ParseCore(actualType, str)
+        | Some(b) -> b.ResolvedType.ParseCore(actualType, str)
         | None -> invalidOp (sprintf "Missing parsing logic for type %A" this.Name)
 
     abstract member SerializeCore: YANGType * obj -> string option
     default this.SerializeCore(actualType: YANGType, o: obj) =
         match this.BaseType with
-        | Some(b) -> b.SerializeCore(actualType, o)
+        | Some(b) -> b.ResolvedType.SerializeCore(actualType, o)
         | None -> invalidOp (sprintf "Missing serializing logic for type %A" this.Name)
 
     abstract member CheckRequiredPropertiesCore: YANGType -> Result<unit, SchemaError list>
     default this.CheckRequiredPropertiesCore(actualType) =
         match this.BaseType with
-        | Some(b) -> b.CheckRequiredPropertiesCore(actualType)
+        | Some(b) -> b.ResolvedType.CheckRequiredPropertiesCore(actualType)
         | None -> Ok()
+
+    override this.EnsureRefs() =
+
+        // Do nothing if this is a primitive type
+        if this.PrimitiveType = this then
+            Ok ()
+        else
+
+            // First, check the base type
+            (
+                match this.BaseType with
+                | Some b -> b.EnsureRefs()
+                | None -> Ok()
+            )
+
+            // Then check that all the required properties have been provided
+            >>= this.CheckRequiredProperties
+
+            // Check that all the restrictions can be applied to this type
+            >>= (fun () ->
+                foldResult (fun _ r ->
+                    if this.CanBeRestrictedWith(r) then
+                        Ok()
+                    else
+                        Error([ InvalidTypeRestriction(r.OriginalStatement.Value, this) ])
+                ) () this.Restrictions
+            )
+
+            // If this type is an enum, check the validity of the names
+            // and provide autocomputed values
+            >>= (fun () ->
+                if this.PrimitiveType = YANGPrimitiveTypes.Enumeration then
+                    checkEnumValuesForType this
+                    |>> ignore
+                else
+                    Ok ()
+            )
+
+            // If a default value has been provided, check that it's valid
+            >>= (fun () ->
+                if not (isNull this.Default) then
+                    match this.IsValid(this.Default) with
+                    | Ok () -> Ok ()
+                    | Error(restriction) -> Error([ InvalidDefault(this, restriction) ])
+                else
+                    Ok()
+            )
+
+
+/// Reference to a YANG type.
+/// A reference can include additional properties and restrictions.
+and YANGTypeRef internal (resolvedType: YANGType option, prefix: string option, name: string, scope: Scope) =
+    inherit YANGNode()
+
+    let mutable _resolvedType = resolvedType
+    let _additionalProperties = Dictionary<string, obj>()
+
+    static member FromExistingType(existingType) =
+        YANGTypeRef(Some existingType, None, Unchecked.defaultof<_>, Unchecked.defaultof<_>)
+
+    member val AdditionalRestrictions = ResizeArray<YANGTypeRestriction>()
+
+    member this.ResolvedType
+        with get() =
+            match this.Resolve() with
+            | Some t -> t
+            | None -> invalidOp "Invalid type reference."
+
+    member this.SetProperty<'T>(prop: YANGTypeProperty<'T>, value: 'T) =
+        _additionalProperties.Add(prop.Name, value)
+
+    member this.GetProperty<'T>(prop: YANGTypeProperty<'T>) : 'T option =
+        match _additionalProperties.TryGetValue(prop.Name) with
+        | (true, x) -> Some(x :?> 'T)
+        | _ -> None
+
+    member internal this.Resolve() : YANGType option =
+        match _resolvedType with
+        | Some _ -> _resolvedType
+        | None ->
+            match scope.ResolveTypeRef(prefix, name) with
+            | None -> None
+            | Some t ->
+                
+                // We create a new type containing the additional properties and restrictions.
+                // If none of them have been provided, use the resolved type as-is, and avoid
+                // an additional allocation.
+                if _additionalProperties.Count = 0 && this.AdditionalRestrictions.Count = 0 then
+                    _resolvedType <- Some t
+                else
+                    let newType =
+                        YANGType(
+                            t.Name,
+                            BaseType = Some (YANGTypeRef.FromExistingType(t)),
+                            OriginalStatement = this.OriginalStatement
+                        )
+                    _additionalProperties |> Seq.iter (fun pair -> newType.SetProperty(pair.Key, pair.Value))
+                    this.AdditionalRestrictions |> Seq.iter (fun r -> newType.Restrictions.Add(r))
+                    _resolvedType <- Some newType
+                
+                _resolvedType
+
+    override this.EnsureRefs() =
+        // Checks that the type can be resolved and is valid
+        match this.Resolve() with
+        | None -> Error([ UnresolvedTypeRef(this.OriginalStatement.Value, name) ])
+        | Some t -> t.EnsureRefs()
 
 
 /// Static class with all the primitive types defined by YANG.
@@ -419,7 +866,7 @@ and YANGPrimitiveTypes private () =
                         | _ -> None
 
                 override this.SerializeCore(_, o) =
-                    if isNull o || not (o :? 'T)then
+                    if isNull o || not (o :? 'a)then
                         None
                     else
                         Some(o.ToString())
@@ -436,7 +883,7 @@ and YANGPrimitiveTypes private () =
                 | Some l -> yield! l
                 | None -> ()
                 match t.BaseType with
-                | Some b -> yield! allValues b
+                | Some b -> yield! allValues (b.ResolvedType)
                 | None -> ()
             }
         allValues t
@@ -675,14 +1122,14 @@ and YANGPrimitiveTypes private () =
                     None
                 else
                     allValues actualType YANGTypeProperties.UnionMembers
-                    |> Seq.tryPick (fun t -> t.Parse(str))
+                    |> Seq.tryPick (fun t -> t.ResolvedType.Parse(str))
 
             override this.SerializeCore(actualType, str) =
                 if isNull str then
                     None
                 else
                     allValues actualType YANGTypeProperties.UnionMembers
-                    |> Seq.tryPick (fun t -> t.Serialize(str))
+                    |> Seq.tryPick (fun t -> t.ResolvedType.Serialize(str))
 
             override this.CanBeRestrictedWith _ =
                 false
@@ -693,7 +1140,7 @@ and YANGPrimitiveTypes private () =
                     
                     // Unions cannot have members of type empty
                     l |> Seq.tryPick (fun t ->
-                        if Object.ReferenceEquals(t.PrimitiveType, YANGPrimitiveTypes.Empty) then
+                        if Object.ReferenceEquals(t.ResolvedType.PrimitiveType, YANGPrimitiveTypes.Empty) then
                             Some t
                         else
                             None
@@ -756,6 +1203,12 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
 
     member val ExportedTypes = Dictionary<YANGName, YANGType>()
 
+    override this.EnsureRefs() =
+        this.DataNodes
+        |> Seq.cast<YANGNode>
+        |> Seq.append (this.ExportedTypes.Values |> Seq.cast<YANGNode>)
+        |> foldResult (fun _ node -> node.EnsureRefs()) ()
+
 
 and YANGModuleRevision(date: DateTime) =
     inherit YANGNode()
@@ -763,6 +1216,9 @@ and YANGModuleRevision(date: DateTime) =
     member val Date = date
     member val Description: string = null with get, set
     member val Reference: string = null with get, set
+
+    override this.EnsureRefs() =
+        Ok()
 
 
 and YANGContainer(name: YANGName) =
@@ -774,19 +1230,38 @@ and YANGContainer(name: YANGName) =
     member val Reference: string = null with get, set
     member val Status = YANGStatus.Current with get, set
     member val DataNodes = ResizeArray<YANGDataNode>()
+
+    override this.EnsureRefs() =
+        this.DataNodes
+        |> foldResult (fun _ node -> node.EnsureRefs()) ()
     
 
 and YANGLeaf(name: YANGName) =
     inherit YANGDataNode()
 
     member this.Name = name
-    member val Type: YANGType = Unchecked.defaultof<YANGType> with get, set
+    member val Type = Unchecked.defaultof<YANGTypeRef> with get, set
     member val Units: string = null with get, set
     member val Default: obj = null with get, set
     member val Mandatory: bool = false with get, set
     member val Description: string = null with get, set
     member val Reference: string = null with get, set
     member val Status = YANGStatus.Current with get, set
+
+    override this.EnsureRefs() =
+
+        // Check that the type is valid
+        this.Type.EnsureRefs()
+
+        // If a default value has been provided, check that it's valid
+        >>= (fun () ->
+            if not (isNull this.Default) then
+                match this.Type.ResolvedType.IsValid(this.Default) with
+                | Ok _ -> Ok()
+                | Error(restriction) -> Error([ InvalidLeafDefault(this, restriction) ])
+            else
+                Ok()
+        )
 
 
 and YANGLeafList(name: YANGName) =
@@ -799,8 +1274,11 @@ and YANGLeafList(name: YANGName) =
     member val OrderedBy = YANGListOrderedBy.System with get, set
     member val Reference: string = null with get, set
     member val Status = YANGStatus.Current with get, set
-    member val Type = Unchecked.defaultof<YANGType> with get, set
+    member val Type = Unchecked.defaultof<YANGTypeRef> with get, set
     member val Units: string = null with get, set
+
+    override this.EnsureRefs() =
+        this.Type.EnsureRefs()
 
 
 and YANGList(name: YANGName) =
@@ -815,3 +1293,7 @@ and YANGList(name: YANGName) =
     member val Status = YANGStatus.Current with get, set
     member val Unique = ResizeArray<string>()
     member val DataNodes = ResizeArray<YANGDataNode>()
+
+    override this.EnsureRefs() =
+        this.DataNodes
+        |> foldResult (fun _ node -> node.EnsureRefs()) ()

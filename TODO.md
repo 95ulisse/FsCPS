@@ -13,6 +13,11 @@
 - YANG parser:
   - Add more builtin models.
   - Finish implementing the spec.
+  - Refactor to make it more functional instead of OO.
+  - Unify post-parse consistency checks like `EnsureRefs`, `CheckRequiredProperties` and so on.
+    Maybe just a single method called `CheckConsistency`?
+  - Add a check to limit the properties that can be added to a type:
+    e.g., an enum cannot have the UnionMembers property.
 
 - Check for leaks of native memory.
   The `>>=` and `|>>` operators used in the code usually free memory only in case of success.
