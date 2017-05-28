@@ -64,6 +64,11 @@
     <Compile Include="Yang\Nodes.fs" />
     <Compile Include="Yang\Combinators.fs" />
     <Compile Include="Yang\SchemaParsers.fs" />
+    <Compile Include="TypeProvider\ProvidedTypes.fsi" />
+    <Compile Include="TypeProvider\ProvidedTypes.fs" />
+    <Compile Include="TypeProvider\AssemblyReader.fs" />
+    <Compile Include="TypeProvider\AssemblyReaderReflection.fs" />
+    <Compile Include="TypeProvider\ProvidedTypesContext.fs" />
     <None Include="Examples\IPAddress.fsx" />
     <None Include="Examples\Get.fsx" />
     <None Include="Examples\Server.fsx" />
