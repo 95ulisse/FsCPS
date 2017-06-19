@@ -69,8 +69,7 @@ and YANGParserOptions() as this =
         
         let checkBuiltin _ =
             if builtinModules |> List.exists (fun x -> x = name) then
-                let resman = ResourceManager("FsCPS.g", Assembly.GetExecutingAssembly())
-                use stream = resman.GetStream(sprintf "yang/models/%s.yang" (name.ToLowerInvariant()))
+                use stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(sprintf "%s.yang" (name.ToLowerInvariant()))
                 YANGParser.ParseModule(stream, this)
             else
                 Error([])
