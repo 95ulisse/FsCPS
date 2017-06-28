@@ -37,3 +37,5 @@
 	  Running the tests in the module `FsCPS.Tests.Server` more that once does not work.
 	  By looking at the output of strace, it looks like that the library binds the server on a unix socket,
 	  but then connects to another where no one is listening.
+	  
+- Add an API to explore paths and IDs, similar to the Python `cps.info`.
