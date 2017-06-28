@@ -56,8 +56,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
     let yangProviderType = factory.ProvidedTypeDefinition(asm, ns, "YANGProvider", None, hideObjectMethods = true, nonNullable = true)
     let staticParams =
         [
-            ProvidedStaticParameter("rootPath", typeof<string>);
             ProvidedStaticParameter("model", typeof<string>)
+            ProvidedStaticParameter("rootPath", typeof<string>, "");
         ]
 
     let nameNormalizerRegex = Regex("(?:^|-|\.)(\w)", RegexOptions.Compiled)
@@ -212,11 +212,14 @@ type YANGProvider(config: TypeProviderConfig) as this =
     do
         yangProviderType.DefineStaticParameters(staticParams, (fun typeName args ->
             match args with
-            | [| :? string as rootPath; :? string as model |] ->
+            | [| :? string as model; :? string as rootPath |] ->
         
                 // Parses the model string and creates the root type
                 YANGParser.ParseModule(model)
-                |>> generateRootTypeForModule typeName rootPath
+                |>> (fun m ->
+                    let rootPath = if String.IsNullOrEmpty rootPath then m.Prefix else rootPath
+                    generateRootTypeForModule typeName rootPath m
+                )
                 |> Result.mapError (List.map (fun e -> e.ToString()) >> String.concat String.Empty)
                 |> Result.okOrThrow failwith
 
