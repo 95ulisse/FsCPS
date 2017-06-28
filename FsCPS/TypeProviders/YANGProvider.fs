@@ -144,8 +144,15 @@ type YANGProvider(config: TypeProviderConfig) as this =
             failwith "Should never be reached"
 
     // Common setter for leaf data nodes.
-    let leafPropertySetter t path args =
-        <@@ failwith "Not implemented." @@>
+    let leafPropertySetter t path (args: Quotations.Expr list) =
+        let expr = <@@ writeAttribute<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
+        
+        // Be sure that we call the `writeAttribute` method with the correct generic parameter
+        match expr with
+        | Call(None, method, [ arg1; _; arg3 ]) ->
+            Expr.Call(method.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
+        | _ ->
+            failwith "Should never be reached"
 
     // Adds new members to the given parent type from the given data node.
     // Adds new nested types for containers, lists and leaf-lists. For the leafs,
