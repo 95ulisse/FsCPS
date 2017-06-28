@@ -1,13 +1,14 @@
 ﻿namespace FsCPS.TypeProviders.Runtime
 
+#nowarn "0686"
+
 open System
 open System.ComponentModel
 open System.Collections.Generic
 open System.Text
 open FsCPS
 
-[<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
-[<CompilerMessageAttribute("This module is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+/// Internals of the runtime for the YANGProvider.
 module YANGProviderRuntime =
 
     let private dataReaders = Dictionary<Type, byte[] -> obj>()
@@ -31,35 +32,47 @@ module YANGProviderRuntime =
         
     // Common data writers
     do
-        let inline w (f: ^a -> byte[]) = dataWriters.Add(typeof< ^a >, unbox< ^a > >> f)
-        w<bool> BitConverter.GetBytes
-        w<int8> (fun x -> [| byte x |])
-        w<int16> BitConverter.GetBytes
-        w<int32> BitConverter.GetBytes
-        w<int64> BitConverter.GetBytes
-        w<uint8> (fun x -> [| byte x |])
-        w<uint16> BitConverter.GetBytes
-        w<uint32> BitConverter.GetBytes
-        w<uint64> BitConverter.GetBytes
-        w<byte[]> id
-        w<string> Encoding.UTF8.GetBytes
-        w<double> (BitConverter.DoubleToInt64Bits >> BitConverter.GetBytes)
+        let inline add (f: ^a -> byte[]) = dataWriters.Add(typeof< ^a >, unbox< ^a > >> f)
+        add<bool> BitConverter.GetBytes
+        add<int8> (fun x -> [| byte x |])
+        add<int16> BitConverter.GetBytes
+        add<int32> BitConverter.GetBytes
+        add<int64> BitConverter.GetBytes
+        add<uint8> (fun x -> [| byte x |])
+        add<uint16> BitConverter.GetBytes
+        add<uint32> BitConverter.GetBytes
+        add<uint64> BitConverter.GetBytes
+        add<byte[]> id
+        add<string> Encoding.UTF8.GetBytes
+        add<double> (BitConverter.DoubleToInt64Bits >> BitConverter.GetBytes)
         
 
+    /// Registers a new type along with its reader and writer.
+    let registerType<'a> (reader: byte[] -> obj) (writer: obj -> byte[]) =
+        if dataReaders.ContainsKey(typeof<'a>) then
+            invalidOp (sprintf "Type %s has already been registered." typeof<'a>.Name)
+        dataReaders.Add(typeof<'a>, reader)
+        dataWriters.Add(typeof<'a>, writer)
+        
+            
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
     let readAttribute<'a> (path: CPSPath) (obj: CPSObject) : 'a option =
-        obj.GetAttribute(path)
-        |> Option.map (fun attr ->
-            dataReaders.[typeof<'a>](attr.Value) :?> 'a
-        )
-        
+        match dataReaders.TryGetValue(typeof<'a>) with
+        | (true, reader) ->
+            obj.GetAttribute(path)
+            |> Option.map (fun attr -> reader attr.Value :?> 'a)
+        | _ ->
+            invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
+            
+            
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
     let writeAttribute<'a> (path: CPSPath) (attrVal: 'a option) (obj: CPSObject) =
-        match attrVal with
-        | Some v ->
-            let arr = dataWriters.[typeof<'a>](box v)
-            obj.SetAttribute(path, arr)
-        | None ->
-            obj.RemoveAttribute(path) |> ignore
+        match dataWriters.TryGetValue(typeof<'a>) with
+        | (true, writer) ->
+            match attrVal with
+            | Some v -> obj.SetAttribute(path, writer (box v))
+            | None -> obj.RemoveAttribute(path) |> ignore
+        | _ ->
+            invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)

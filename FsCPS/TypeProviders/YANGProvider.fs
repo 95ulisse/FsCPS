@@ -138,8 +138,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Be sure that we call the `readAttribute` method with the correct generic parameter
         match expr with
-        | Call(None, method, args) ->
-            Expr.Call(method.GetGenericMethodDefinition().MakeGenericMethod([| t |]), args)
+        | Call(None, mtd, args) ->
+            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), args)
         | _ ->
             failwith "Should never be reached"
 
@@ -149,8 +149,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Be sure that we call the `writeAttribute` method with the correct generic parameter
         match expr with
-        | Call(None, method, [ arg1; _; arg3 ]) ->
-            Expr.Call(method.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
+        | Call(None, mtd, [ arg1; _; arg3 ]) ->
+            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
         | _ ->
             failwith "Should never be reached"
 
