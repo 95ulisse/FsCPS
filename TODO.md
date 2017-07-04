@@ -18,6 +18,7 @@
     Maybe just a single method called `CheckConsistency`?
   - Add a check to limit the properties that can be added to a type:
     e.g., an enum cannot have the UnionMembers property.
+  - Circular imports.
 
 - Check for leaks of native memory.
   The `>>=` and `|>>` operators used in the code usually free memory only in case of success.
@@ -28,6 +29,8 @@
   At the moment, the library supports just one "level" (?) of attributes.
   I could not find any documentation about this.
   Also fix functions like `AttrIdFromPath` that have magic offsets inside.
+  The same goes for the lists. As an example, check `base-ip/ipv4` when an interface has more
+  than one address.
 
 - Native interop:
   - Find a way to wake up a thread suspended on a cps_api_wait_for_event call. (`CPSEventObservable`)
@@ -39,3 +42,4 @@
 	  but then connects to another where no one is listening.
 	  
 - Add an API to explore paths and IDs, similar to the Python `cps.info`.
+  This might lead to the implementation of a type provider to have paths checked at compile time.
