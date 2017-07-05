@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.Collections.ObjectModel
 open System.Runtime.InteropServices
+open System.Text
 open System.Threading
 open FsCPS.Native
 
@@ -76,11 +77,6 @@ type CPSObject(key: CPSKey) =
 
     /// Constructs a new object with a key with the given path.
     /// The default qualifier is `CPSQualifier.Target`.
-    new (rootPathStr) =
-        CPSObject(CPSKey(CPSQualifier.Target, CPSPath rootPathStr))
-
-    /// Constructs a new object with a key with the given path.
-    /// The default qualifier is `CPSQualifier.Target`.
     new (rootPath) =
         CPSObject(CPSKey(CPSQualifier.Target, rootPath))
 
@@ -144,6 +140,25 @@ type CPSObject(key: CPSKey) =
     /// Removes an attribute using its absolute path.
     member this.RemoveAttribute(path: CPSPath) =
         attributes.Remove(path)
+        
+    /// Returns a string representation of this object,
+    /// complete of key and attributes.
+    member this.ToString(truncateArray: bool) =
+        let sb = StringBuilder()
+        sb.Append("Key: ").Append(this.Key.Key).Append('\n')
+          .Append("Path: ").Append(this.Key.Path |> Option.map (fun x -> x.ToString()) |> Option.toObj).Append('\n') |> ignore
+        attributes.Values |> Seq.iteri (fun i attr ->
+            sb.Append(if i > 0 then "\n" else "")
+              .Append(attr.Path.ToString())
+              .Append(": [ ") |> ignore
+            let arr = attr.Value : byte[]
+            for j in 0 .. (min (arr.Length - 1) (if truncateArray then 9 else Int32.MaxValue)) do
+                sb.Append(if j > 0 then ", " else "").Append(arr.[j]) |> ignore
+            if truncateArray && arr.Length > 10 then
+                sb.Append(", ...") |> ignore
+            sb.Append(" ]") |> ignore
+        )
+        sb.ToString()
 
     /// Converts this object to its native representation.
     /// This method will pin all the attributes and return

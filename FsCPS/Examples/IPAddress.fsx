@@ -23,7 +23,7 @@ let ipaddress = IPAddress.Parse("10.0.0.1").GetAddressBytes()
 let ipaddress_prefix = [| 16uy |]
 
 // Create a CPS object and set the attributes
-let o = new CPSObject("base-ip/ipv4/address")
+let o = new CPSObject(CPSPath "base-ip/ipv4/address")
 o.SetAttribute("ip", ipaddress)
 o.SetAttribute("prefix-length", ipaddress_prefix)
 o.SetAttribute(CPSPath "base-ip/ipv4/ifindex", ifindex)

@@ -144,11 +144,6 @@ type YANGProvider(config: TypeProviderConfig) as this =
             )
         let ctor4 =
             factory.ProvidedConstructor(
-                [ factory.ProvidedParameter("pathStr", typeof<string>) ],
-                (fun args -> <@@ CPSObject(%%(args.[0]) : string) @@>)
-            )
-        let ctor5 =
-            factory.ProvidedConstructor(
                 [
                     factory.ProvidedParameter("path", typeof<CPSPath>);
                     factory.ProvidedParameter("qual", typeof<CPSQualifier>)
@@ -165,7 +160,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 isStatic = false
             )
 
-        t.AddMembers([ ctor1; ctor2; ctor3; ctor4; ctor5 ])
+        t.AddMembers([ ctor1; ctor2; ctor3; ctor4 ])
         t.AddMember(objProp)
         t
         
