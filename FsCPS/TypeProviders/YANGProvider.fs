@@ -4,6 +4,7 @@
 
 open System
 open System.Collections.Generic
+open System.IO
 open System.Reflection
 open System.Text.RegularExpressions
 open Microsoft.FSharp.Core.CompilerServices
@@ -60,7 +61,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
     let yangProviderType = factory.ProvidedTypeDefinition(asm, ns, "YANGProvider", None, hideObjectMethods = true, nonNullable = true)
     let staticParams =
         [
-            ProvidedStaticParameter("model", typeof<string>)
+            ProvidedStaticParameter("model", typeof<string>);
+            ProvidedStaticParameter("fileName", typeof<string>, "");
             ProvidedStaticParameter("rootPath", typeof<string>, "");
         ]
 
@@ -74,6 +76,9 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
     let makeOptionType t =
         typedefof<option<_>>.MakeGenericType([| t |])
+
+    let makeListType t =
+        typedefof<list<_>>.MakeGenericType([| t |])
 
 
     // Returns the actual type to use for the given YANG type.
@@ -100,7 +105,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
             failwithf "Unexpected primitive type %A." yangType.PrimitiveType.Name
             
     /// Generetes a new type for container nodes.
-    let rec generateContainerType (ctx: YANGProviderGenerationContext) (container: YANGContainer) =
+    let rec generateContainerType (ctx: YANGProviderGenerationContext) (container: YANGDataNodeContainer) =
         
         // Crate a new type with the same name of the container and add it to the parent type
         let newType =
@@ -201,6 +206,14 @@ type YANGProvider(config: TypeProviderConfig) as this =
             )
         Expr.NewObjectUnchecked(ctor :?> ConstructorInfo, [ args.[0] ])
 
+    // Common getter for list nodes
+    and listPropertyGetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
+        <@@ raise (NotImplementedException "List getters not implemented yet.") @@>
+
+    // Common setter for list nodes
+    and listPropertySetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
+        <@@ raise (NotImplementedException "List setters not implemented yet.") @@>
+
 
     // Adds new members to the given parent type from the given data node.
     // Adds new nested types for containers, lists and leaf-lists. For the leafs,
@@ -243,7 +256,21 @@ type YANGProvider(config: TypeProviderConfig) as this =
             
         
         | :? YANGList as list ->
-            failwith "YANGList not implemented."
+            
+            // Generates a container type
+            let containerType = generateContainerType ctx list
+
+            // Adds an instance property to the parent type for the list
+            let prop =
+                factory.ProvidedProperty(
+                    normalizeName list.Name.Name,
+                    makeListType containerType,
+                    listPropertyGetter containerType,
+                    listPropertySetter containerType
+                )
+            if not (isNull list.Description) then
+                prop.AddXmlDoc(list.Description)
+            ctx.CurrentType.AddMember(prop)
         
         | :? YANGLeafList as leafList ->
             failwith "YANGLeafList not implemented."
@@ -280,10 +307,19 @@ type YANGProvider(config: TypeProviderConfig) as this =
     do
         yangProviderType.DefineStaticParameters(staticParams, (fun typeName args ->
             match args with
-            | [| :? string as model; :? string as rootPath |] ->
+            | [| :? string as model; :? string as fileName; :? string as rootPath |] ->
         
+                // Loads the model inline or from a file
+                let m =
+                    if not (String.IsNullOrEmpty(model)) then
+                        YANGParser.ParseModule(model)
+                    else if not (String.IsNullOrEmpty(fileName)) then
+                        using (File.OpenRead(fileName)) YANGParser.ParseModule
+                    else
+                        invalidOp "Please, provide a YANG model inline or specify the name of a file."
+
                 // Parses the model string and creates the root type
-                YANGParser.ParseModule(model)
+                m
                 |>> (fun m ->
                     let rootPath = if String.IsNullOrEmpty rootPath then m.Prefix else rootPath
                     generateRootTypeForModule typeName rootPath m

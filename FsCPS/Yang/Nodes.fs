@@ -292,8 +292,20 @@ and [<AbstractClass; AllowNullLiteral>] YANGNode() =
 
 
 /// Base class for a YANG node that carries actual data.
-and [<AbstractClass>] YANGDataNode() =
+and [<AbstractClass>] YANGDataNode(name: YANGName) =
     inherit YANGNode()
+
+    member this.Name = name
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+
+
+/// Base class for a YANG node which is a data node and can contain itself other data nodes.
+and [<AbstractClass>] YANGDataNodeContainer(name) =
+    inherit YANGDataNode(name)
+
+    member val DataNodes = ResizeArray<YANGDataNode>()
 
 
 /// Status of a YANG schema node.
@@ -1220,32 +1232,23 @@ and YANGModuleRevision(date: DateTime) =
         Ok()
 
 
-and YANGContainer(name: YANGName) =
-    inherit YANGDataNode()
+and YANGContainer(name) =
+    inherit YANGDataNodeContainer(name)
 
-    member this.Name = name
     member val Presence: string = null with get, set
-    member val Description: string = null with get, set
-    member val Reference: string = null with get, set
-    member val Status = YANGStatus.Current with get, set
-    member val DataNodes = ResizeArray<YANGDataNode>()
 
     override this.EnsureRefs() =
         this.DataNodes
         |> foldResult (fun _ node -> node.EnsureRefs()) ()
     
 
-and YANGLeaf(name: YANGName) =
-    inherit YANGDataNode()
+and YANGLeaf(name) =
+    inherit YANGDataNode(name)
 
-    member this.Name = name
     member val Type = Unchecked.defaultof<YANGTypeRef> with get, set
     member val Units: string = null with get, set
     member val Default: obj = null with get, set
     member val Mandatory: bool = false with get, set
-    member val Description: string = null with get, set
-    member val Reference: string = null with get, set
-    member val Status = YANGStatus.Current with get, set
 
     override this.EnsureRefs() =
 
@@ -1263,16 +1266,12 @@ and YANGLeaf(name: YANGName) =
         )
 
 
-and YANGLeafList(name: YANGName) =
-    inherit YANGDataNode()
+and YANGLeafList(name) =
+    inherit YANGDataNode(name)
 
-    member this.Name = name
-    member val Description: string = null with get, set
     member val MaxElements = Int32.MaxValue with get, set
     member val MinElements = 0 with get, set
     member val OrderedBy = YANGListOrderedBy.System with get, set
-    member val Reference: string = null with get, set
-    member val Status = YANGStatus.Current with get, set
     member val Type = Unchecked.defaultof<YANGTypeRef> with get, set
     member val Units: string = null with get, set
 
@@ -1280,18 +1279,13 @@ and YANGLeafList(name: YANGName) =
         this.Type.EnsureRefs()
 
 
-and YANGList(name: YANGName) =
-    inherit YANGDataNode()
+and YANGList(name) =
+    inherit YANGDataNodeContainer(name)
 
-    member this.Name = name
-    member val Description: string = null with get, set
     member val MinElements = 0 with get, set
     member val MaxElements = Int32.MaxValue with get, set
     member val OrderedBy = YANGListOrderedBy.System with get, set
-    member val Reference: string = null with get, set
-    member val Status = YANGStatus.Current with get, set
     member val Unique = ResizeArray<string>()
-    member val DataNodes = ResizeArray<YANGDataNode>()
 
     override this.EnsureRefs() =
         this.DataNodes

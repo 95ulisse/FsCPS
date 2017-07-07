@@ -48,7 +48,7 @@ module YANGProviderRuntime =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (reader, _)) ->
             obj.GetAttribute(path)
-            |> Option.map (fun attr -> reader attr.Value :?> 'a)
+            |> Option.map (fun attr -> reader attr :?> 'a)
         | _ ->
             invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
             
