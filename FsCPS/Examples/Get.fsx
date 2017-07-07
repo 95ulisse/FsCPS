@@ -15,12 +15,9 @@ let obj = CPSObject(CPSPath (argv.[3]))
 
 // Sends the request and prints the results.
 match CPSTransaction.Get([ obj ]) with
-| Error e -> printf "Error: %s\n" e
+| Error e ->
+    printf "Error: %s\n" e
 | Ok objects ->
-    objects |> List.iter (fun o ->
-        printf "Key: %s\n" o.Key.Key
-        o.Attributes.Values |> Seq.iter (fun attr ->
-            printf "%s: %A\n" (attr.Path.ToString()) attr.Value
-        )
-        printf "\n"
-    )
+    objects
+    |> Seq.map (fun o -> o.ToString(true))
+    |> Seq.iter (printf "%s\n\n")

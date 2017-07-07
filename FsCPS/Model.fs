@@ -6,6 +6,7 @@ open System.Collections.ObjectModel
 open System.Runtime.InteropServices
 open System.Text
 open System.Threading
+open Microsoft.FSharp.Reflection
 open FsCPS.Native
 
 
@@ -89,7 +90,7 @@ type CPSObject(key: CPSKey) =
 
     /// Read-only view of the attributes of this object as a dictionary.
     /// Attributes are indexed by their path.
-    member val Attributes = ReadOnlyDictionary(attributes)
+    member val Attributes = attributes.Values
 
     /// Sets the value of an attribute.
     /// Note that `name` is expected to be a path relative to the object's key.
@@ -105,7 +106,19 @@ type CPSObject(key: CPSKey) =
 
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: byte[]) =
-        attributes.Add(path, CPSAttribute(this, path, value))
+        attributes.Add(path, Leaf(path, value))
+
+    /// Sets the value of an attribute using its absolute path.
+    member this.SetAttribute(path: CPSPath, value: byte[] list) =
+        attributes.Add(path, LeafList(path, value))
+
+    /// Sets the value of an attribute using its absolute path.
+    member this.SetAttribute(path: CPSPath, value: CPSAttribute list list) =
+        attributes.Add(path, List(path, value))
+
+    /// Sets the value of an attribute using its absolute path.
+    member internal this.SetAttribute(path: CPSPath, value: CPSAttribute) =
+        attributes.Add(path, value)
 
     /// Extracts an attribute from this object.
     /// Note that `name` is expected to be a path relative to the object's key.
@@ -120,10 +133,20 @@ type CPSObject(key: CPSKey) =
             )
 
     /// Extracts an attribute using its absolute path.
+    /// This method is just a convenience method to read leaf values.
     member this.GetAttribute(path: CPSPath) =
-       match attributes.TryGetValue(path) with
-       | (true, a) -> Some a
-       | _ -> None
+        this.GetAttribute(path, CPSAttributeClass.Leaf)
+        |> Option.map (
+            function
+            | Leaf (_, v) -> v
+            | _ -> invalidOp "Unreachable"
+        )
+
+    /// Extracts an attribute using its absolute path.
+    member this.GetAttribute(path: CPSPath, c: CPSAttributeClass) =
+        match attributes.TryGetValue(path) with
+        | (true, a) -> Some (a.CheckClass(c) |> Result.okOrThrow invalidOp)
+        | _ -> None
 
     /// Removes an attribute from this object.
     /// Note that `name` is expected to be a path relative to the object's key.
@@ -146,17 +169,10 @@ type CPSObject(key: CPSKey) =
     member this.ToString(truncateArray: bool) =
         let sb = StringBuilder()
         sb.Append("Key: ").Append(this.Key.Key).Append('\n')
-          .Append("Path: ").Append(this.Key.Path |> Option.map (fun x -> x.ToString()) |> Option.toObj).Append('\n') |> ignore
+          .Append("Path alias: ").Append(this.Key.Path).Append('\n') |> ignore
         attributes.Values |> Seq.iteri (fun i attr ->
             sb.Append(if i > 0 then "\n" else "")
-              .Append(attr.Path.ToString())
-              .Append(": [ ") |> ignore
-            let arr = attr.Value : byte[]
-            for j in 0 .. (min (arr.Length - 1) (if truncateArray then 9 else Int32.MaxValue)) do
-                sb.Append(if j > 0 then ", " else "").Append(arr.[j]) |> ignore
-            if truncateArray && arr.Length > 10 then
-                sb.Append(", ...") |> ignore
-            sb.Append(" ]") |> ignore
+              .Append(attr.ToString(truncateArray, 0) : string) |> ignore
         )
         sb.ToString()
 
@@ -172,7 +188,7 @@ type CPSObject(key: CPSKey) =
         >>= (fun nativeObject ->
             attributes.Values
             |> foldResult (fun _ attr ->
-                attr.AddToNativeObject(nativeObject)
+                attr.AddToNativeObject(nativeObject, Stack<_>())
             ) ()
             |>> (fun _ -> nativeObject)
         )
@@ -191,29 +207,163 @@ type CPSObject(key: CPSKey) =
         |>> CPSObject
 
         // Iterate the attributes and copy them into the object
-        >>= (fun o ->
-            NativeMethods.IterateAttributes(nativeObject)
-            |> foldResult (fun _ attrId ->
-                NativeMethods.AttrIdToPath(attrId)
-                |> Result.pipe (NativeMethods.GetAttribute nativeObject attrId)
-                |>> (fun (path, attr) -> o.SetAttribute(CPSPath path, attr))
+        |> Result.tee (fun o ->
+            NativeMethods.BeginAttributeIterator(nativeObject).Iterate()
+            |> foldResult (fun _ it ->
+                CPSAttribute.FromIterator it
+                |>> (fun (attr: CPSAttribute) -> o.SetAttribute(attr.Path, attr))
             ) ()
-            |>> (fun _ -> o)
         )
 
 
 /// Attribute of a CPS object.
-and CPSAttribute internal (obj: CPSObject, path: CPSPath, value: byte[]) =
+and CPSAttribute =
+    | Leaf of CPSPath * byte[]
+    | LeafList of CPSPath * byte[] list
+    | Container of CPSPath
+    | List of CPSPath * CPSAttribute list list
+    
+    with
 
-    member val Path = path
-    member val Value = value
-    member val OwnerObject = obj
+    member this.Path =
+        match this with
+        | Leaf(p, _) | LeafList(p, _) | Container p | List(p, _) -> p
 
-    member internal this.AddToNativeObject(obj: NativeObject) =
-        NativeMethods.AttrIdFromPath(path.ToString())
-        >>= (fun attrId ->
-            NativeMethods.AddAttribute obj attrId value
+    member this.ToString(truncateArray: bool, indent: int) =
+        let ind = String.replicate indent "    "
+        let sb = StringBuilder().Append(ind).Append(this.Path.ToString()).Append(": ")
+        match this with
+    
+        // Leaf
+        | Leaf (path, arr) ->
+            sb.Append("[ ") |> ignore
+            for i in 0 .. (min (arr.Length - 1) (if truncateArray then 9 else Int32.MaxValue)) do
+                sb.Append(if i > 0 then ", " else "").Append(arr.[i]) |> ignore
+            if truncateArray && arr.Length > 10 then
+                sb.Append(", ...") |> ignore
+            sb.Append(" ]") |> ignore
+
+        // List
+        | List (_, lst) ->
+            sb.Append("List [") |> ignore
+            lst |> List.iteri (fun i el ->
+                sb.Append(if i = 0 then "\n" else "")
+                  .Append(ind + "    ")
+                  .Append("{") |> ignore
+                el |> List.iteri (fun j x ->
+                    sb.Append(if j = 0 then "\n" else "")
+                      .Append(x.ToString(truncateArray, indent + 2) : string)
+                      .Append("\n")|> ignore
+                )
+                sb.Append(ind + "    ").Append("}\n") |> ignore
+            )
+            sb.Append("]") |> ignore
+
+        | _ -> raise (NotImplementedException("Missing stringification of attribute"))
+
+        sb.ToString()
+
+    member internal this.CheckClass(c: CPSAttributeClass) =
+        match this, c with
+        | Leaf _, CPSAttributeClass.Leaf -> Ok this
+        | LeafList _, CPSAttributeClass.LeafList -> Ok this
+        | Container _, CPSAttributeClass.Container -> Ok this
+        | List _, CPSAttributeClass.List -> Ok this
+        | _ ->
+            Error (
+                sprintf "Attribute with path %s is a %s, but given a %s."
+                        (this.Path.ToString())
+                        (Enum.GetName(typeof<CPSAttributeClass>, c))
+                        (match FSharpValue.GetUnionFields(this, typeof<CPSAttribute>) with (info, _) -> info.Name)
+            )
+
+    member internal this.AddToNativeObject(obj: NativeObject, ids: Stack<NativeAttrID>) =
+
+        // Extracts attribute ID
+        NativeMethods.AttrIdFromPath(this.Path.ToString())
+
+        // Checks that the class of the attribute matches the current case of the union
+        |> Result.tee (fun attrId ->
+            NativeMethods.AttrClassFromAttrId(attrId)
+            >>= this.CheckClass
         )
+
+        >>= fun attrId ->
+            match this with
+            | Leaf (_, arr) ->
+                
+                // For the leafs, just add the value to the object
+                ids.Push(attrId)
+                let aid = ids.ToArray()
+                ids.Pop() |> ignore
+                printf "Adding attribute with nested id path: %A\n" aid
+                NativeMethods.AddNestedAttribute obj aid arr
+
+            | LeafList _ ->
+
+                // TODO: Implement leaf lists
+                raise (NotImplementedException "Leaf lists are not yet implemented.")
+
+            | Container _ ->
+
+                // TODO: Implement containers
+                raise (NotImplementedException "Containers are not yet implemented.")
+
+            | List (_, lst) ->
+
+                // Iterate the list and add each single attribute
+                ids.Push(attrId)
+                lst |> foldResult (fun i item ->
+                    ids.Push(i)
+                    item
+                    |> foldResult (fun () attr -> attr.AddToNativeObject(obj, ids)) ()
+                    |>> (fun _ ->
+                        ids.Pop() |> ignore
+                        i + 1UL
+                    )
+                ) 0UL
+                |>> (fun _ -> ids.Pop() |> ignore)
+
+    static member internal FromIterator (it: NativeObjectIterator) =
+        let attrId = NativeMethods.AttrIdFromAttr it.attr
+        
+        NativeMethods.AttrClassFromAttrId attrId
+        |> Result.pipe (NativeMethods.AttrIdToPath attrId |>> CPSPath)
+        >>= fun (c, path) ->
+            match c with
+            | CPSAttributeClass.Leaf ->
+                
+                // Read the current value
+                Ok (Leaf (path, it.Value()))
+
+            | CPSAttributeClass.LeafList ->
+                
+                // TODO: Implement leaf lists
+                raise (NotImplementedException "Leaf lists are not yet implemented.")
+
+            | CPSAttributeClass.Container ->
+                
+                // TODO: Implement containers
+                raise (NotImplementedException "Containers are not yet implemented.")
+
+            | CPSAttributeClass.List ->
+
+                // Lists are implemented in binary form as a list of lists.
+                it.Inside().Iterate()
+                |> foldResult (fun outerList outerIt ->
+                    outerIt.Inside().Iterate()
+                    |> foldResult (fun innerList innerIt ->
+                        CPSAttribute.FromIterator(innerIt)
+                        |>> (fun innerAttr -> innerAttr :: innerList)
+                    ) []
+                    |>> List.rev
+                    |>> (fun innerList -> innerList :: outerList)
+                ) []
+                |>> List.rev
+                |>> (fun lst -> List (path, lst))
+
+            | _ ->
+                invalidOp (sprintf "Unexpected enum value %d" (int c))
 
 
 /// Container of a transaction for CPS objects.
