@@ -104,6 +104,42 @@ type CPSObject(key: CPSKey) =
                 "Use the overload accepting an absolute CPSPath."
             )
 
+    /// Sets the value of an attribute.
+    /// Note that `name` is expected to be a path relative to the object's key.
+    member this.SetAttribute(name: string, value: byte[] list) =
+        match this.Key.Path with
+        | Some path -> this.SetAttribute(path.Append(name), value)
+        | None ->
+            invalidOp (
+                "Cannot use a relative path to get/set attributes, " +
+                "since this object has been constructed with a partial key. " +
+                "Use the overload accepting an absolute CPSPath."
+            )
+
+    /// Sets the value of an attribute.
+    /// Note that `name` is expected to be a path relative to the object's key.
+    member this.SetAttribute(name: string, value: CPSAttribute list) =
+        match this.Key.Path with
+        | Some path -> this.SetAttribute(path.Append(name), value)
+        | None ->
+            invalidOp (
+                "Cannot use a relative path to get/set attributes, " +
+                "since this object has been constructed with a partial key. " +
+                "Use the overload accepting an absolute CPSPath."
+            )
+
+    /// Sets the value of an attribute.
+    /// Note that `name` is expected to be a path relative to the object's key.
+    member this.SetAttribute(name: string, value: CPSAttribute list list) =
+        match this.Key.Path with
+        | Some path -> this.SetAttribute(path.Append(name), value)
+        | None ->
+            invalidOp (
+                "Cannot use a relative path to get/set attributes, " +
+                "since this object has been constructed with a partial key. " +
+                "Use the overload accepting an absolute CPSPath."
+            )
+
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: byte[]) =
         attributes.Add(path, Leaf(path, value))
@@ -111,6 +147,10 @@ type CPSObject(key: CPSKey) =
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: byte[] list) =
         attributes.Add(path, LeafList(path, value))
+
+    /// Sets the value of an attribute using its absolute path.
+    member this.SetAttribute(path: CPSPath, value: CPSAttribute list) =
+        attributes.Add(path, Container(path, value))
 
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: CPSAttribute list list) =
@@ -220,14 +260,14 @@ type CPSObject(key: CPSKey) =
 and CPSAttribute =
     | Leaf of CPSPath * byte[]
     | LeafList of CPSPath * byte[] list
-    | Container of CPSPath
+    | Container of CPSPath * CPSAttribute list
     | List of CPSPath * CPSAttribute list list
     
     with
 
     member this.Path =
         match this with
-        | Leaf(p, _) | LeafList(p, _) | Container p | List(p, _) -> p
+        | Leaf(p, _) | LeafList(p, _) | Container (p, _) | List(p, _) -> p
 
     member this.ToString(truncateArray: bool, indent: int) =
         let ind = String.replicate indent "    "
@@ -243,6 +283,31 @@ and CPSAttribute =
                 sb.Append(", ...") |> ignore
             sb.Append(" ]") |> ignore
 
+        // LeafList
+        | LeafList (path, lst) ->
+            sb.Append("LeafList [") |> ignore
+            lst |> List.iteri (fun i arr ->
+                sb.Append(if i = 0 then "\n" else "")
+                  .Append(ind + "    ")
+                  .Append("[ ") |> ignore
+                for j in 0 .. (min (arr.Length - 1) (if truncateArray then 9 else Int32.MaxValue)) do
+                    sb.Append(if j > 0 then ", " else "").Append(arr.[j]) |> ignore
+                if truncateArray && arr.Length > 10 then
+                    sb.Append(", ...") |> ignore
+                sb.Append(" ]\n") |> ignore
+            )
+            sb.Append(ind).Append("]") |> ignore
+
+        // Container
+        | Container (_, lst) ->
+            sb.Append("Container {") |> ignore
+            lst |> List.iteri (fun i x ->
+                sb.Append(if i = 0 then "\n" else "")
+                    .Append(x.ToString(truncateArray, indent + 1) : string)
+                    .Append("\n")|> ignore
+            )
+            sb.Append(ind).Append("}") |> ignore
+
         // List
         | List (_, lst) ->
             sb.Append("List [") |> ignore
@@ -257,7 +322,7 @@ and CPSAttribute =
                 )
                 sb.Append(ind + "    ").Append("}\n") |> ignore
             )
-            sb.Append("]") |> ignore
+            sb.Append(ind).Append("]") |> ignore
 
         | _ -> raise (NotImplementedException("Missing stringification of attribute"))
 
@@ -296,18 +361,26 @@ and CPSAttribute =
                 ids.Push(attrId)
                 let aid = ids.ToArray()
                 ids.Pop() |> ignore
-                printf "Adding attribute with nested id path: %A\n" aid
                 NativeMethods.AddNestedAttribute obj aid arr
 
-            | LeafList _ ->
+            | LeafList (_, lst) ->
 
-                // TODO: Implement leaf lists
-                raise (NotImplementedException "Leaf lists are not yet implemented.")
+                ids.Push(attrId)
+                let aid = ids.ToArray()
+                ids.Pop() |> ignore
 
-            | Container _ ->
+                // Be sure that the list gets added to the object, even though it's empty
+                match lst with
+                | [] -> NativeMethods.AddNestedAttribute obj aid Array.empty<_>
+                | _ -> lst |> foldResult (fun () arr -> NativeMethods.AddNestedAttribute obj aid arr) ()
 
-                // TODO: Implement containers
-                raise (NotImplementedException "Containers are not yet implemented.")
+            | Container (_, lst) ->
+
+                // Add all the attributes of the container under this one
+                ids.Push(attrId)
+                lst
+                |> foldResult (fun () attr -> attr.AddToNativeObject(obj, ids)) ()
+                |>> (fun _ -> ids.Pop() |> ignore)
 
             | List (_, lst) ->
 
@@ -338,13 +411,37 @@ and CPSAttribute =
 
             | CPSAttributeClass.LeafList ->
                 
-                // TODO: Implement leaf lists
-                raise (NotImplementedException "Leaf lists are not yet implemented.")
+                // Leaf lists are represented as consecutive values.
+                // Consume as much values as possible at once.
+                // Clone the iterator to make sure to not advance the original too far.
+
+                let itCopy = NativeObjectIterator(attr = it.attr, len = it.len)
+                let mutable listLen = 0
+                let lst =
+                    itCopy.Iterate()
+                    |> Seq.takeWhile (fun it -> (NativeMethods.AttrIdFromAttr it.attr) = attrId)
+                    |> Seq.fold (fun lst it ->
+                        listLen <- listLen + 1
+                        it.Value() :: lst
+                    ) []
+                    |> List.rev
+                
+                // Advances the original iterator till the end of the leaf list
+                for i in 0 .. (listLen - 1) do
+                    it.Next()
+
+                Ok (LeafList (path, lst))
 
             | CPSAttributeClass.Container ->
                 
-                // TODO: Implement containers
-                raise (NotImplementedException "Containers are not yet implemented.")
+                // Containers are just a list of attributes
+                it.Inside().Iterate()
+                |> foldResult (fun lst innerIt ->
+                    CPSAttribute.FromIterator(innerIt)
+                    |>> (fun attr -> attr :: lst)
+                ) []
+                |>> List.rev
+                |>> (fun lst -> Container (path, lst))
 
             | CPSAttributeClass.List ->
 
