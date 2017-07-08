@@ -1,0 +1,125 @@
+﻿// This is a simplified model of the actual dell-base-vlan.
+
+module dell-base-vlan {
+
+    namespace "http://www.dell.com/esg/networking/os10/dell-base-vlan";
+    prefix "base-vlan";
+
+    import ietf-yang-types {
+        prefix yang;
+    }
+
+    organization
+        "Dell Inc";
+
+    contact
+        "www.dell.com/support/softwarecontacts";
+
+    description
+        "This module contains a collection of YANG definitions for managing
+        configuration and operational data for Dell VLAN functionality";
+
+    revision 2015-03-01 {
+        description "Initial version";
+    }
+
+
+    typedef logical-ifindex {
+        type uint32;
+        description
+            "Uniquely identifies any interface system-wide including
+            physical ports, LAG interfaces and Vlan interfaces";
+    }
+
+    typedef vlan-id {
+        type uint16 {
+            range "1 .. 4094";
+        }
+        description
+            "This type denotes a IEEE 802.1Q VLAN Identifier.";
+            reference "IEEE 802.1Q";
+    }
+
+    typedef ipv4-address {
+        type binary {
+            length "4";
+        }
+        description
+            "This type denotes a IPv4 address as a 4 octet binary number
+            in network-byte order.";
+    }
+
+    typedef mac-address {
+        type binary {
+            length "6";
+        }
+        description
+            "This type denotes a MAC address as a 6 octet binary number
+            in network-byte order.";
+    }
+
+
+    leaf id {
+        type vlan-id;
+        description "the vlan id associated with interface";
+    }
+
+    leaf ifindex {
+        type logical-ifindex;
+        description "index received from to/kernel for interface";
+    }
+
+    leaf name {
+        type string;
+        description "Name associated with the interface";
+    }
+
+    leaf mac-address {
+        type mac-address;
+        description "Vlan interface MAC Address";
+    }
+
+    leaf ip-address {
+        type ipv4-address;
+        description "IP address associated with the vlan";
+    }
+
+    leaf num-ports-untagged {
+        type uint32;
+        description "number of members in the vlan interface";
+    }
+
+    leaf-list untagged-ports {
+        type logical-ifindex;
+    }
+
+    leaf num-ports-tagged {
+        type uint32;
+        description "number of members in the vlan interface";
+    }
+
+    leaf-list tagged-ports {
+        type logical-ifindex;
+    }
+
+    leaf enable-statistics {
+        type boolean;
+        description "Enable/Disable statistics";
+    }
+
+    leaf learning-mode {
+        type boolean;
+        description "Enable/Disable learning per VLAN";
+    }
+
+    leaf oper-status {
+        type uint32;
+        description "Status of the vlan entry";
+    }
+
+    leaf admin-status {
+        type uint32;
+        description "Status of the vlan entry";
+    }
+
+}

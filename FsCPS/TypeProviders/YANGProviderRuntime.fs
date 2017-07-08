@@ -44,7 +44,7 @@ module YANGProviderRuntime =
             
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let readAttribute<'a> (path: CPSPath) (obj: CPSObject) : 'a option =
+    let readLeaf<'a> (path: CPSPath) (obj: CPSObject) : 'a option =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (reader, _)) ->
             obj.GetAttribute(path)
@@ -55,11 +55,36 @@ module YANGProviderRuntime =
             
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let writeAttribute<'a> (path: CPSPath) (attrVal: 'a option) (obj: CPSObject) =
+    let writeLeaf<'a> (path: CPSPath) (attrVal: 'a option) (obj: CPSObject) =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (_, writer)) ->
             match attrVal with
             | Some v -> obj.SetAttribute(path, writer (box v))
+            | None -> obj.RemoveAttribute(path) |> ignore
+        | _ ->
+            invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
+
+
+    [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
+    [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+    let readLeafList<'a> (path: CPSPath) (obj: CPSObject) : 'a list option =
+        match transformers.TryGetValue(typeof<'a>) with
+        | (true, (reader, _)) ->
+            obj.GetAttribute(path, CPSAttributeClass.LeafList)
+            |> Option.bind (function
+                            | LeafList (_, lst) -> lst |> List.map (reader >> unbox<'a>) |> Some
+                            | _ -> None)
+        | _ ->
+            invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
+            
+            
+    [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
+    [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+    let writeLeafList<'a> (path: CPSPath) (attrVal: 'a list option) (obj: CPSObject) =
+        match transformers.TryGetValue(typeof<'a>) with
+        | (true, (_, writer)) ->
+            match attrVal with
+            | Some lst -> obj.SetAttribute(path, lst |> List.map writer)
             | None -> obj.RemoveAttribute(path) |> ignore
         | _ ->
             invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)

@@ -61,7 +61,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
     let yangProviderType = factory.ProvidedTypeDefinition(asm, ns, "YANGProvider", None, hideObjectMethods = true, nonNullable = true)
     let staticParams =
         [
-            ProvidedStaticParameter("model", typeof<string>);
+            ProvidedStaticParameter("model", typeof<string>, "");
             ProvidedStaticParameter("fileName", typeof<string>, "");
             ProvidedStaticParameter("rootPath", typeof<string>, "");
         ]
@@ -172,9 +172,9 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
     // Common getter for leaf data nodes.
     and leafPropertyGetter t path (args: Quotations.Expr list) =
-        let expr = <@@ readAttribute<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
+        let expr = <@@ readLeaf<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
         
-        // Be sure that we call the `readAttribute` method with the correct generic parameter
+        // Be sure that we call the `readLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, args) ->
             Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), args)
@@ -183,9 +183,9 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
     // Common setter for leaf data nodes.
     and leafPropertySetter t path (args: Quotations.Expr list) =
-        let expr = <@@ writeAttribute<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
+        let expr = <@@ writeLeaf<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
         
-        // Be sure that we call the `writeAttribute` method with the correct generic parameter
+        // Be sure that we call the `writeLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, [ arg1; _; arg3 ]) ->
             Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
@@ -205,6 +205,28 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ) 
             )
         Expr.NewObjectUnchecked(ctor :?> ConstructorInfo, [ args.[0] ])
+
+    // Common getter for leaf-list nodes
+    and leafListPropertyGetter t path (args: Quotations.Expr list) =
+        let expr = <@@ readLeafList<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
+        
+        // Be sure that we call the `readLeaf` method with the correct generic parameter
+        match expr with
+        | Call(None, mtd, args) ->
+            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), args)
+        | _ ->
+            failwith "Should never be reached"
+
+    // Common setter for leaf-list nodes
+    and leafListPropertySetter t path (args: Quotations.Expr list) =
+        let expr = <@@ writeLeafList<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
+        
+        // Be sure that we call the `writeLeaf` method with the correct generic parameter
+        match expr with
+        | Call(None, mtd, [ arg1; _; arg3 ]) ->
+            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
+        | _ ->
+            failwith "Should never be reached"
 
     // Common getter for list nodes
     and listPropertyGetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
@@ -253,7 +275,23 @@ type YANGProvider(config: TypeProviderConfig) as this =
             if not (isNull container.Description) then
                 prop.AddXmlDoc(container.Description)
             ctx.CurrentType.AddMember(prop)
+
+        | :? YANGLeafList as leafList ->
             
+            // Generates the type for the leaf
+            let leafType = generateLeafType ctx leafList.Type.ResolvedType
+
+            // Adds an instance property to the parent type for the leaf
+            let prop =
+                factory.ProvidedProperty(
+                    normalizeName leafList.Name.Name,
+                    makeOptionType (makeListType leafType),
+                    leafListPropertyGetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString()),
+                    leafListPropertySetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString())
+                )
+            if not (isNull leafList.Description) then
+                prop.AddXmlDoc(leafList.Description)
+            ctx.CurrentType.AddMember(prop)
         
         | :? YANGList as list ->
             
@@ -271,9 +309,6 @@ type YANGProvider(config: TypeProviderConfig) as this =
             if not (isNull list.Description) then
                 prop.AddXmlDoc(list.Description)
             ctx.CurrentType.AddMember(prop)
-        
-        | :? YANGLeafList as leafList ->
-            failwith "YANGLeafList not implemented."
         
         | _ -> ()
 

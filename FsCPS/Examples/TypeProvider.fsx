@@ -3,23 +3,14 @@
 #I "../bin/Debug"
 #r "FsCPS.dll"
 
-open System
-open System.Net
 open FsCPS
 open FsCPS.TypeProviders
 
-// A simplified version of the dell-base-ip model
-type Simple = YANGProvider<"""
-    module simple {
-        namespace "http://example.com";
-        prefix simple;
+// Load the YANG model with the type provider
+let [<Literal>] yangFileName = __SOURCE_DIRECTORY__ + "/dell-base-vlan.yang"
+type VLANEntry = YANGProvider<fileName = yangFileName>
 
-        leaf simple-value {
-            type uint32;
-        }
-    }
-""">
-
-let obj = Simple(CPSPath "simple")
-obj.SimpleValue <- Some 42u
-printf "%d\n" obj.SimpleValue.Value
+let obj = VLANEntry(CPSPath "base-vlan/entry")
+obj.Id <- Some 43us
+obj.UntaggedPorts <- Some [ 41u ]
+printf "%s\n" (obj.ToString(true))
