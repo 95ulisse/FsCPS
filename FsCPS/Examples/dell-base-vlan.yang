@@ -32,7 +32,7 @@ module dell-base-vlan {
     }
 
     typedef vlan-id {
-        type uint16 {
+        type uint32 {
             range "1 .. 4094";
         }
         description
@@ -59,67 +59,69 @@ module dell-base-vlan {
     }
 
 
-    leaf id {
-        type vlan-id;
-        description "the vlan id associated with interface";
-    }
+	container entry {
+	
+		leaf id {
+			type vlan-id;
+			description "the vlan id associated with interface";
+		}
 
-    leaf ifindex {
-        type logical-ifindex;
-        description "index received from to/kernel for interface";
-    }
+		leaf ifindex {
+			type logical-ifindex;
+			description "index received from to/kernel for interface";
+		}
 
-    leaf name {
-        type string;
-        description "Name associated with the interface";
-    }
+		leaf name {
+			type string;
+			description "Name associated with the interface";
+		}
 
-    leaf mac-address {
-        type mac-address;
-        description "Vlan interface MAC Address";
-    }
+		leaf mac-address {
+			type mac-address;
+			description "Vlan interface MAC Address";
+		}
 
-    leaf ip-address {
-        type ipv4-address;
-        description "IP address associated with the vlan";
-    }
+		leaf ip-address {
+			type ipv4-address;
+			description "IP address associated with the vlan";
+		}
 
-    leaf num-ports-untagged {
-        type uint32;
-        description "number of members in the vlan interface";
-    }
+		leaf num-ports-untagged {
+			type uint32;
+			description "number of members in the vlan interface";
+		}
 
-    leaf-list untagged-ports {
-        type logical-ifindex;
-    }
+		leaf-list untagged-ports {
+			type logical-ifindex;
+		}
 
-    leaf num-ports-tagged {
-        type uint32;
-        description "number of members in the vlan interface";
-    }
+		leaf num-ports-tagged {
+			type uint32;
+			description "number of members in the vlan interface";
+		}
 
-    leaf-list tagged-ports {
-        type logical-ifindex;
-    }
+		leaf-list tagged-ports {
+			type logical-ifindex;
+		}
 
-    leaf enable-statistics {
-        type boolean;
-        description "Enable/Disable statistics";
-    }
+		leaf enable-statistics {
+			type boolean;
+			description "Enable/Disable statistics";
+		}
 
-    leaf learning-mode {
-        type boolean;
-        description "Enable/Disable learning per VLAN";
-    }
+		leaf learning-mode {
+			type boolean;
+			description "Enable/Disable learning per VLAN";
+		}
 
-    leaf oper-status {
-        type uint32;
-        description "Status of the vlan entry";
-    }
+		leaf oper-status {
+			type uint32;
+			description "Status of the vlan entry";
+		}
 
-    leaf admin-status {
-        type uint32;
-        description "Status of the vlan entry";
-    }
-
+		leaf admin-status {
+			type uint32;
+			description "Status of the vlan entry";
+		}
+	}
 }

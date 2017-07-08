@@ -142,23 +142,23 @@ type CPSObject(key: CPSKey) =
 
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: byte[]) =
-        attributes.Add(path, Leaf(path, value))
+        attributes.[path] <- Leaf(path, value)
 
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: byte[] list) =
-        attributes.Add(path, LeafList(path, value))
+        attributes.[path] <- LeafList(path, value)
 
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: CPSAttribute list) =
-        attributes.Add(path, Container(path, value))
+        attributes.[path] <- Container(path, value)
 
     /// Sets the value of an attribute using its absolute path.
     member this.SetAttribute(path: CPSPath, value: CPSAttribute list list) =
-        attributes.Add(path, List(path, value))
+        attributes.[path] <- List(path, value)
 
     /// Sets the value of an attribute using its absolute path.
     member internal this.SetAttribute(path: CPSPath, value: CPSAttribute) =
-        attributes.Add(path, value)
+        attributes.[path] <- value
 
     /// Extracts an attribute from this object.
     /// Note that `name` is expected to be a path relative to the object's key.

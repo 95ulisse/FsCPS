@@ -333,8 +333,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
         if not ctx.IsEmpty then
             failwith "YANGProviderGenerationContext is not balanced"
 
-        Testing.FormatProvidedType(rootType, signatureOnly = false, ignoreOutput = false, useQualifiedNames = false)
-        |> printf "%s\n"
+        //Testing.FormatProvidedType(rootType, signatureOnly = false, ignoreOutput = false, useQualifiedNames = false)
+        //|> printf "%s\n"
 
         rootType
 

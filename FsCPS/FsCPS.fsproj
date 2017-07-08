@@ -78,6 +78,7 @@
     <None Include="Examples\TraceEvents.fsx" />
     <None Include="Examples\TypeProvider.fsx" />
     <None Include="Examples\dell-base-vlan.yang" />
+    <None Include="Examples\vlan.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">
