@@ -55,19 +55,30 @@
   <ItemGroup>
     <Content Include="packages.config" />
     <Compile Include="AssemblyInfo.fs" />
+    <Compile Include="ProviderImplementation\ProvidedTypes.fsi" />
+    <Compile Include="ProviderImplementation\ProvidedTypes.fs" />
+    <Compile Include="ProviderImplementation\AssemblyReader.fs" />
+    <Compile Include="ProviderImplementation\AssemblyReaderReflection.fs" />
+    <Compile Include="ProviderImplementation\ProvidedTypesContext.fs" />
+    <Compile Include="ProviderImplementation\ProvidedTypesTesting.fs" />
     <Compile Include="Util.fs" />
     <Compile Include="Native.fs" />
     <Compile Include="Model.fs" />
-    <Resource Include="Yang\Models\ietf-yang-types.yang" />
-    <Resource Include="Yang\Models\ietf-inet-types.yang" />
+    <EmbeddedResource Include="Yang\Models\ietf-yang-types.yang" />
+    <EmbeddedResource Include="Yang\Models\ietf-inet-types.yang" />
     <Compile Include="Yang\Statements.fs" />
     <Compile Include="Yang\Nodes.fs" />
     <Compile Include="Yang\Combinators.fs" />
     <Compile Include="Yang\SchemaParsers.fs" />
+    <Compile Include="TypeProviders\YANGProviderRuntime.fs" />
+    <Compile Include="TypeProviders\YANGProvider.fs" />
     <None Include="Examples\IPAddress.fsx" />
     <None Include="Examples\Get.fsx" />
     <None Include="Examples\Server.fsx" />
     <None Include="Examples\TraceEvents.fsx" />
+    <None Include="Examples\TypeProvider.fsx" />
+    <None Include="Examples\dell-base-vlan.yang" />
+    <None Include="Examples\vlan.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">

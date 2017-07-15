@@ -27,9 +27,9 @@ type Arbitraries() =
         |> Arb.fromGen
     static member CPSPath() =
         [
-            "base-ip";
-            "base-ip/ipv4";
-            "base-ip/ipv4/address";
+            //"base-ip";
+            //"base-ip/ipv4";
+            //"base-ip/ipv4/address";
             "base-ip/ipv4/address/ip";
             "base-ip/ipv4/ifindex"
         ]
@@ -124,8 +124,9 @@ module Native =
         // Convert the object to a native one and try yo iterate the attributes
         managedObj.ToNativeObject()
         |>> (fun nativeObject ->
-            NativeMethods.IterateAttributes nativeObject
-            |> Seq.fold (fun (res, count) attrId ->
+            NativeMethods.BeginAttributeIterator(nativeObject).Iterate()
+            |> Seq.fold (fun (res, count) it ->
+                let attrId = NativeMethods.AttrIdFromAttr(it.attr)
                 if not res then
                     (false, 0)
                 else
@@ -136,7 +137,7 @@ module Native =
                         | None -> Ok(false, 0)
                         | Some attr ->
                             NativeMethods.GetAttribute nativeObject attrId
-                            |>> (fun attrValue -> (attrValue = attr.Value, count + 1))
+                            |>> (fun attrValue -> (attrValue = attr, count + 1))
                     )
                     |> function
                         | Ok x -> x

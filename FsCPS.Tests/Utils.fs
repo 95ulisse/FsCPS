@@ -61,11 +61,11 @@ module Utils =
         
         // Compares the attributes
         a.Attributes
-        |> Seq.iter (fun pair ->
-            match b.GetAttribute(pair.Key) with
+        |> Seq.iter (fun attr ->
+            match b.GetAttribute(attr.Path) with
             | None ->
-                raise (XunitException (sprintf "Missing attribute with path %s." (pair.Key.ToString())))
+                raise (XunitException (sprintf "Missing attribute with path %s." (attr.Path.ToString())))
             | Some attr2 ->
-                if pair.Value.Value <> attr2.Value then
-                    raise (XunitException (sprintf "Expected ttribute with path %s to have value %A, but got %A." (pair.Key.ToString()) pair.Value.Value attr2.Value))
+                if a.GetAttribute(attr.Path).Value <> attr2 then
+                    raise (XunitException (sprintf "Expected ttribute with path %s to have value %A, but got %A." (attr.Path.ToString()) (a.GetAttribute(attr.Path).Value) attr2))
         )

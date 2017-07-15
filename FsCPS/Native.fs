@@ -14,10 +14,18 @@ type CPSQualifier =
 
 
 type CPSAttributeType =
-    | UInt16 = 0
-    | UInt32 = 1
-    | UInt64 = 2
+    //| UInt16 = 0
+    //| UInt32 = 1
+    //| UInt64 = 2
     | Binary = 3
+
+
+type CPSAttributeClass =
+    | Leaf = 1
+    | LeafList = 2
+    | Container = 3
+    | Subsystem = 4
+    | List = 5
 
 
 type CPSOperationType =
@@ -149,169 +157,177 @@ type internal NativeServerRegistrationRequest =
     val mutable rollback_function: NativeServerCallback<NativeTransactionParams>
 
 
-/// Definitions of all the native methods needed by FsCPS.
-module internal NativeMethods =
 
-    // Private module to make sure that the extern functions are not directly available to the outside
-    module private Extern =
 
-        [<Literal>]
-        let cpsLibrary = "libcps-api-common.so"
 
-        // Library initialization
+// Private module to make sure that the extern functions are not directly available to the outside
+module private Extern =
 
-        [<DllImport(cpsLibrary)>]
-        extern void cps_api_class_map_init()
+    [<Literal>]
+    let cpsLibrary = "libcps-api-common.so"
 
-        // Objects
+    // Library initialization
 
-        [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
-        extern NativeObject cps_api_object_create_int(string desc, uint32 line, string name)
+    [<DllImport(cpsLibrary)>]
+    extern void cps_api_class_map_init()
 
-        [<DllImport(cpsLibrary)>]
-        extern void cps_api_object_delete(NativeObject obj)
+    // Objects
 
-        [<DllImport(cpsLibrary)>]
-        extern bool cps_api_object_clone(NativeObject dest, NativeObject src)
+    [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
+    extern NativeObject cps_api_object_create_int(string desc, uint32 line, string name)
 
-        [<DllImport(cpsLibrary)>]
-        extern nativeint cps_api_object_key(NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern void cps_api_object_delete(NativeObject obj)
 
-        [<DllImport(cpsLibrary)>]
-        extern void cps_api_object_set_key(NativeObject obj, nativeint key)
+    [<DllImport(cpsLibrary)>]
+    extern bool cps_api_object_clone(NativeObject dest, NativeObject src)
 
-        [<DllImport(cpsLibrary)>]
-        extern bool cps_api_object_reserve(NativeObject obj, unativeint size)
+    [<DllImport(cpsLibrary)>]
+    extern nativeint cps_api_object_key(NativeObject obj)
 
-        // Object attributes
+    [<DllImport(cpsLibrary)>]
+    extern void cps_api_object_set_key(NativeObject obj, nativeint key)
 
-        [<DllImport(cpsLibrary)>]
-        extern bool cps_api_object_e_add(
-            NativeObject obj,
-            [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2s)>] NativeAttrID[] aid,
-            unativeint id_size,
-            CPSAttributeType atype,
-            [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 5s)>] byte[] data,
-            unativeint len
-        )
+    [<DllImport(cpsLibrary)>]
+    extern bool cps_api_object_reserve(NativeObject obj, unativeint size)
 
-        [<DllImport(cpsLibrary)>]
-        extern void cps_api_object_attr_delete(NativeObject obj, NativeAttrID aid)
+    // Object attributes
 
-        [<DllImport(cpsLibrary)>]
-        extern NativeAttrID cps_api_object_attr_id(NativeAttr attr)
+    [<DllImport(cpsLibrary)>]
+    extern bool cps_api_object_e_add(
+        NativeObject obj,
+        [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2s)>] NativeAttrID[] aid,
+        unativeint id_size,
+        CPSAttributeType atype,
+        [<MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 5s)>] byte[] data,
+        unativeint len
+    )
 
-        [<DllImport(cpsLibrary)>]
-        extern nativeint cps_api_object_attr_data_bin(NativeAttr attr)
+    [<DllImport(cpsLibrary)>]
+    extern void cps_api_object_attr_delete(NativeObject obj, NativeAttrID aid)
 
-        [<DllImport(cpsLibrary)>]
-        extern unativeint cps_api_object_attr_len(NativeAttr attr)
+    [<DllImport(cpsLibrary)>]
+    extern NativeAttrID cps_api_object_attr_id(NativeAttr attr)
+
+    [<DllImport(cpsLibrary)>]
+    extern nativeint cps_api_object_attr_data_bin(NativeAttr attr)
+
+    [<DllImport(cpsLibrary)>]
+    extern unativeint cps_api_object_attr_len(NativeAttr attr)
         
-        [<DllImport(cpsLibrary)>]
-        extern NativeAttr cps_api_object_attr_get(NativeObject obj, NativeAttrID aid)
+    [<DllImport(cpsLibrary)>]
+    extern NativeAttr cps_api_object_attr_get(NativeObject obj, NativeAttrID aid)
 
-        [<DllImport(cpsLibrary)>]
-        extern void cps_api_object_it_begin(NativeObject obj, [<In; Out>] NativeObjectIterator it)
+    [<DllImport(cpsLibrary)>]
+    extern void cps_api_object_it_begin(NativeObject obj, [<In; Out>] NativeObjectIterator it)
 
-        // Keys
+    // Keys
 
-        [<DllImport(cpsLibrary)>]
-        extern bool cps_api_key_from_attr_with_qual(nativeint key, NativeAttrID aid, CPSQualifier qual)
+    [<DllImport(cpsLibrary)>]
+    extern bool cps_api_key_from_attr_with_qual(nativeint key, NativeAttrID aid, CPSQualifier qual)
 
-        [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
-        extern bool cps_api_key_from_string(nativeint key, [<MarshalAs(UnmanagedType.LPStr)>] string str)
+    [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
+    extern bool cps_api_key_from_string(nativeint key, [<MarshalAs(UnmanagedType.LPStr)>] string str)
 
-        [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
-        extern nativeint cps_api_key_print(nativeint key, [<MarshalAs(UnmanagedType.LPStr)>] StringBuilder buffer, unativeint len)
+    [<DllImport(cpsLibrary, CharSet = CharSet.Ansi)>]
+    extern nativeint cps_api_key_print(nativeint key, [<MarshalAs(UnmanagedType.LPStr)>] StringBuilder buffer, unativeint len)
 
-        // Attribute ID to name mapping
+    // Attribute ID to name mapping
 
-        [<DllImport(cpsLibrary, EntryPoint = "_Z21cps_dict_find_by_namePKc", CharSet = CharSet.Ansi)>]
-        extern nativeint cps_dict_find_by_name(string path)
+    [<DllImport(cpsLibrary, EntryPoint = "_Z19cps_dict_find_by_idm", CharSet = CharSet.Ansi)>]
+    extern nativeint cps_dict_find_by_id(NativeAttrID id)
 
-        [<DllImport(cpsLibrary)>]
-        extern nativeint cps_attr_id_to_name(NativeAttrID id)
+    [<DllImport(cpsLibrary, EntryPoint = "_Z21cps_dict_find_by_namePKc", CharSet = CharSet.Ansi)>]
+    extern nativeint cps_dict_find_by_name(string path)
 
-        // Object lists
+    [<DllImport(cpsLibrary)>]
+    extern nativeint cps_attr_id_to_name(NativeAttrID id)
 
-        [<DllImport(cpsLibrary)>]
-        extern NativeObjectList cps_api_object_list_create()
+    // Object lists
 
-        [<DllImport(cpsLibrary)>]
-        extern void cps_api_object_list_destroy(NativeObjectList list, bool delete_objects)
+    [<DllImport(cpsLibrary)>]
+    extern NativeObjectList cps_api_object_list_create()
 
-        [<DllImport(cpsLibrary)>]
-        extern NativeObject cps_api_object_list_get(NativeObjectList list, unativeint i)
+    [<DllImport(cpsLibrary)>]
+    extern void cps_api_object_list_destroy(NativeObjectList list, bool delete_objects)
 
-        [<DllImport(cpsLibrary)>]
-        extern bool cps_api_object_list_append(NativeObjectList list, NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern NativeObject cps_api_object_list_get(NativeObjectList list, unativeint i)
 
-        [<DllImport(cpsLibrary)>]
-        extern unativeint cps_api_object_list_size(NativeObjectList list)
+    [<DllImport(cpsLibrary)>]
+    extern bool cps_api_object_list_append(NativeObjectList list, NativeObject obj)
 
-        // Transactions
+    [<DllImport(cpsLibrary)>]
+    extern unativeint cps_api_object_list_size(NativeObjectList list)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_transaction_init([<In; Out>] NativeTransactionParams trans)
+    // Transactions
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_transaction_close([<In; Out>] NativeTransactionParams trans)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_transaction_init([<In; Out>] NativeTransactionParams trans)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_get([<In; Out>] NativeGetParams req)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_transaction_close([<In; Out>] NativeTransactionParams trans)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_create([<In; Out>] NativeTransactionParams trans, NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_get([<In; Out>] NativeGetParams req)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_set([<In; Out>] NativeTransactionParams trans, NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_create([<In; Out>] NativeTransactionParams trans, NativeObject obj)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_delete([<In; Out>] NativeTransactionParams trans, NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_set([<In; Out>] NativeTransactionParams trans, NativeObject obj)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_get_request_init([<In; Out>] NativeGetParams req)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_delete([<In; Out>] NativeTransactionParams trans, NativeObject obj)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_get_request_close([<In; Out>] NativeGetParams req)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_get_request_init([<In; Out>] NativeGetParams req)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_commit([<In; Out>] NativeTransactionParams trans)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_get_request_close([<In; Out>] NativeGetParams req)
 
-        // API for servers
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_commit([<In; Out>] NativeTransactionParams trans)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_operation_subsystem_init(nativeint& handle, int threads)
+    // API for servers
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_register(NativeServerRegistrationRequest& req)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_operation_subsystem_init(nativeint& handle, int threads)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_object_type_operation(nativeint key)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_register(NativeServerRegistrationRequest& req)
 
-        // Events
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_object_type_operation(nativeint key)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_event_service_init()
+    // Events
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_event_client_connect(NativeEventHandle& handle)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_event_service_init()
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_event_client_disconnect(NativeEventHandle handle)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_event_client_connect(NativeEventHandle& handle)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_event_client_register(NativeEventHandle handle, NativeEventRegistration& reg)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_event_client_disconnect(NativeEventHandle handle)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_wait_for_event(NativeEventHandle handle, NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_event_client_register(NativeEventHandle handle, NativeEventRegistration& reg)
 
-        [<DllImport(cpsLibrary)>]
-        extern int cps_api_event_publish(NativeEventHandle handle, NativeObject obj)
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_wait_for_event(NativeEventHandle handle, NativeObject obj)
+
+    [<DllImport(cpsLibrary)>]
+    extern int cps_api_event_publish(NativeEventHandle handle, NativeObject obj)
 
     // Initializes the native library as soon as the module is loaded.
     do
-        Extern.cps_api_class_map_init()
+        cps_api_class_map_init()
+
+
+
+/// Definitions of all the native methods needed by FsCPS.
+module internal NativeMethods =
 
     // Precompiled regex to validate key strings
     let private _keyRegex = Regex("^(\d+\.?)+$", RegexOptions.Compiled)
@@ -369,6 +385,20 @@ module internal NativeMethods =
             Error (sprintf "Cannot find attribute with id %d" id)
         else
             Ok (Marshal.PtrToStringAnsi(ptr))
+
+    /// Extracts the attribute class from an attribute ID.
+    let AttrClassFromAttrId id =
+        let ptr = Extern.cps_dict_find_by_id(id)
+        if ptr = IntPtr.Zero then
+            Error (sprintf "Cannot find attribute with id %d" id)
+        else
+            // Again, the offset 28 was found by trial and error. See above.
+            let c = Marshal.ReadInt32(ptr, 28)
+            Ok (enum<CPSAttributeClass> c)
+
+    /// Extracts the attribute ID from an attribute pointer.
+    let AttrIdFromAttr attr =
+        Extern.cps_api_object_attr_id(attr)
 
     /// Creates a native key out of a qualifier and a path.
     let CreateKey qual path =
@@ -434,38 +464,11 @@ module internal NativeMethods =
         else
             Error "Could not reseve space in object."
 
-    /// Checks if an iterator is valid or not.
-    let IteratorIsValid (it: NativeObjectIterator) =
-        if it.attr = IntPtr.Zero then
-            false
-        else
-            let len = Marshal.ReadInt64(it.attr, sizeof<uint64>)
-            let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
-            it.len >= totalLen
-
-    /// Advances the given iterator.
-    let IteratorNext (it: NativeObjectIterator) =
-        if it.attr <> IntPtr.Zero then
-            let len = Marshal.ReadInt64(it.attr, sizeof<uint64>)
-            let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
-            if it.len < totalLen then
-                it.attr <- IntPtr.Zero
-            else
-                it.len <- it.len - totalLen
-                it.attr <- it.attr + nativeint totalLen
-
-    /// Returns a sequence that iterates over all the attributes in the given object.
-    let IterateAttributes (obj: NativeObject) : seq<_> =
-        // Creates an iterator
+    /// Creates a new iterator for the attributes of the given object.
+    let BeginAttributeIterator (obj: NativeObject) =
         let it = NativeObjectIterator()
         Extern.cps_api_object_it_begin(obj, it)
-
-        // Walks the iterator
-        seq {
-            while IteratorIsValid it do
-                yield Extern.cps_api_object_attr_id(it.attr)
-                IteratorNext(it)
-        }
+        it
 
     /// Returns a sequence that iterates over all the native objects in the given list.
     let IterateObjectList (l: NativeObjectList) =
@@ -478,13 +481,16 @@ module internal NativeMethods =
                     yield Extern.cps_api_object_list_get(l, i)
             }
 
-    /// Adds a binary attribute to a native CPS object.
-    /// On success, returns the handle to the native memory added to the native object.
-    let AddAttribute (obj: NativeObject) (aid: NativeAttrID) (value: byte[]) =
-        if Extern.cps_api_object_e_add(obj, [| aid |], 1un, CPSAttributeType.Binary, value, unativeint value.Length) then
+    // Adds a nested attribute to the given object.
+    let AddNestedAttribute (obj: NativeObject) (aid: NativeAttrID[]) (value: byte[]) =
+        if Extern.cps_api_object_e_add(obj, aid, unativeint aid.Length, CPSAttributeType.Binary, value, unativeint value.Length) then
             Ok ()
         else
             Error "Cannot add attribute to native object."
+
+    /// Adds a binary attribute to a native CPS object.
+    let AddAttribute (obj: NativeObject) (aid: NativeAttrID) (value: byte[]) =
+        AddNestedAttribute obj [| aid |] value
 
     /// Returns a copy of the attribute store in the given object with the given id.
     let GetAttribute (obj: NativeObject) (aid: NativeAttrID) =
@@ -696,3 +702,49 @@ module internal NativeMethods =
             Ok ()
         else
             Error (sprintf "Cannot publish event (Return value: %s = %d)." (ReturnValueToString ret) ret)
+
+
+// Augments the NativeObjectIterator with methods useful for traversing attribute tree
+type NativeObjectIterator with
+
+    /// Checks if the iterator is valid or not.
+    member this.IsValid =
+        if this.attr = IntPtr.Zero then
+            false
+        else
+            let len = Marshal.ReadInt64(this.attr, sizeof<uint64>)
+            let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
+            this.len >= totalLen
+
+    /// Extracts a copy of the contents of the current attribute.
+    member this.Value() =
+        let len = int (Extern.cps_api_object_attr_len(this.attr))
+        let arr = Array.zeroCreate<byte> len
+        Marshal.Copy(Extern.cps_api_object_attr_data_bin(this.attr), arr, 0, len)
+        arr
+
+    /// Advances the iterator.
+    member this.Next() =
+        if this.attr <> IntPtr.Zero then
+            let len = Marshal.ReadInt64(this.attr, sizeof<uint64>)
+            let totalLen = unativeint (len + 2L * (int64 sizeof<uint64>))
+            if this.len < totalLen then
+                this.attr <- IntPtr.Zero
+            else
+                this.len <- this.len - totalLen
+                this.attr <- this.attr + nativeint totalLen
+
+    /// Returns a new iterator pointing inside the current value.
+    member this.Inside() =
+        let insideIt = NativeObjectIterator(attr = this.attr, len = this.len)
+        insideIt.len <- unativeint (Marshal.ReadInt64(insideIt.attr, sizeof<uint64>))
+        insideIt.attr <- insideIt.attr + 2n * (nativeint sizeof<uint64>)
+        insideIt
+
+    /// Returns a lazy sequence that walks the iterator.
+    member this.Iterate() =
+        seq {
+            while this.IsValid do
+                yield this
+                this.Next()
+        }

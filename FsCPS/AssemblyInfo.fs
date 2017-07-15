@@ -3,6 +3,7 @@
 open System.Reflection
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
+open Microsoft.FSharp.Core.CompilerServices
 
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
@@ -39,6 +40,9 @@ open System.Runtime.InteropServices
 
 // Internals must be visible to the tests.
 [<assembly: InternalsVisibleTo("FsCPS.Tests")>]
+
+// This assembly exposes a type provider.
+[<assembly: TypeProviderAssembly>]
 
 do
     ()
