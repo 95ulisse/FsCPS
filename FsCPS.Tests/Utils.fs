@@ -60,12 +60,4 @@ module Utils =
             raise (XunitException (sprintf "Expected object with key %s, but got %s." a.Key.Key b.Key.Key))
         
         // Compares the attributes
-        a.Attributes
-        |> Seq.iter (fun attr ->
-            match b.GetAttribute(attr.Path) with
-            | None ->
-                raise (XunitException (sprintf "Missing attribute with path %s." (attr.Path.ToString())))
-            | Some attr2 ->
-                if a.GetAttribute(attr.Path).Value <> attr2 then
-                    raise (XunitException (sprintf "Expected ttribute with path %s to have value %A, but got %A." (attr.Path.ToString()) (a.GetAttribute(attr.Path).Value) attr2))
-        )
+        Assert.True(a.Attributes = b.Attributes)

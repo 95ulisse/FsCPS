@@ -1,0 +1,84 @@
+// This is an example of a YANG model with a complex structure
+// to help test the type provider.
+
+module example {
+    prefix example;
+    namespace "http://example.com/yang-example";
+
+    // A root leaf:
+    // this will generate a property on the root type.
+    leaf root-leaf {
+        type int32;
+    }
+
+    // A root leaf-list:
+    // this will generate a property on the root type.
+    leaf-list root-leaf-list {
+        type int32;
+    }
+
+    // A root container:
+    // this will generate a nested type and a property on the root type.
+    // A factory method will also be added to the root type.
+    container root-container {
+        
+        // The leaf inside the container should generate a property
+        // inside the type of the container.
+        leaf container-leaf {
+            type int32;
+        }
+
+        // This will generate a new container type (nested within the previous one),
+        // a factory method on the root type and a property on the parent container.
+        container nested-container {
+            leaf container-container-leaf {
+                type int32;
+            }
+        }
+
+    }
+
+    // In the end, a root list:
+    // this will generate a nested type and a property on the root type.
+    // A factory method will also be added to the root type.
+    list root-list {
+
+        // You got the idea.
+
+        leaf list-leaf {
+            type int32;
+        }
+
+        container list-container {
+            leaf list-container-leaf {
+                type int32;
+            }
+        }
+
+        list list-list {
+            
+            leaf list-list-leaf {
+                type int32;
+            }
+
+            container list-list-container {
+                leaf list-list-container-leaf {
+                    type int32;
+                }
+            }
+
+        }
+
+    }
+
+    // This is to test that the factory methods created in the root type
+    // do not cause name clashes.
+    container a-container {
+        container a-container {
+            leaf good {
+                type int32;
+            }
+        }
+    }
+
+}

@@ -1,12 +1,22 @@
 ﻿namespace FsCPS.TypeProviders.Runtime
 
 #nowarn "0686"
+#nowarn "10001"
 
 open System
 open System.ComponentModel
 open System.Collections.Generic
 open System.Text
 open FsCPS
+open FsCPS.TypeProviders
+
+
+[<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
+[<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+type AttributePathSegment =
+| Access of CPSAttributeID
+| Indexer
+
 
 /// Internals of the runtime for the YANGProvider.
 module YANGProviderRuntime =
@@ -33,6 +43,14 @@ module YANGProviderRuntime =
         add<string> (fun (arr, _) -> Encoding.UTF8.GetString arr) Encoding.UTF8.GetBytes
         add<double> (fun (arr, _) -> BitConverter.Int64BitsToDouble(BitConverter.ToInt64(arr, 0)))
                     (BitConverter.DoubleToInt64Bits >> BitConverter.GetBytes)
+
+
+    let rec private listItem i lst =
+        match lst with
+        | [] -> None
+        | _ when i < 0 -> None
+        | x :: _ when i = 0 -> Some x
+        | x :: xs -> listItem (i - 1) xs
        
 
     /// Registers a new type along with its reader and writer.
@@ -48,7 +66,9 @@ module YANGProviderRuntime =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (reader, _)) ->
             obj.GetAttribute(path)
-            |> Option.map (fun attr -> reader attr :?> 'a)
+            |> Option.bind (function
+                            | Leaf (_, arr) -> arr |> reader |> unbox<'a> |> Some
+                            | _ -> None)
         | _ ->
             invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
             
@@ -59,7 +79,7 @@ module YANGProviderRuntime =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (_, writer)) ->
             match attrVal with
-            | Some v -> obj.SetAttribute(path, writer (box v))
+            | Some v -> obj.SetAttribute(Leaf(path.AttributeID.Value, writer (box v)))
             | None -> obj.RemoveAttribute(path) |> ignore
         | _ ->
             invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
@@ -70,7 +90,7 @@ module YANGProviderRuntime =
     let readLeafList<'a> (path: CPSPath) (obj: CPSObject) : 'a list option =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (reader, _)) ->
-            obj.GetAttribute(path, CPSAttributeClass.LeafList)
+            obj.GetAttribute(path)
             |> Option.bind (function
                             | LeafList (_, lst) -> lst |> List.map (reader >> unbox<'a>) |> Some
                             | _ -> None)
@@ -84,7 +104,63 @@ module YANGProviderRuntime =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (_, writer)) ->
             match attrVal with
-            | Some lst -> obj.SetAttribute(path, lst |> List.map writer)
+            | Some lst -> obj.SetAttribute(LeafList(path.AttributeID.Value, lst |> List.map writer))
             | None -> obj.RemoveAttribute(path) |> ignore
         | _ ->
             invalidArg "'a" (sprintf "Type %s has not been registered. Please, use YANGProviderRuntime.registerType to register a new type." typeof<'a>.Name)
+
+
+    [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
+    [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+    let readPath<'a> segments indices (obj: CPSObject) =
+        
+        let rec f segments indices attr =
+            match segments, indices with
+
+            // Base case            
+            | [], [] ->
+                Some attr
+
+            // Unbalanced indices
+            | [], _ :: _ ->
+                None
+
+            // Access to a fixed attribute ID.
+            // This is used to access properties inside containers.
+            | Access attrId :: remainingSegs, _ ->
+                match attr with
+                | Container (_, map) ->
+                    map
+                    |> Map.tryFind attrId
+                    |> Option.bind (f remainingSegs indices)
+                | _ ->
+                    None
+
+            // Parametrized indexer.
+            // This is used to access a specific container in a list.
+            | Indexer :: remainingSegs, index :: remainingIndices ->
+                match attr with
+                | List (_, lst) ->
+                    lst
+                    |> listItem index
+                    |> Option.map (fun map -> Container ((CPSAttributeID 0UL), map))
+                    |> Option.bind (f remainingSegs remainingIndices)
+                | _ ->
+                    None
+
+            // Parametrized indexer, but missing index
+            | Indexer :: _, [] ->
+                None
+        
+        f segments indices (Container ((CPSAttributeID 0UL), obj.Attributes))
+
+
+    // ----------------------------------------------------------------------------------------
+    // ----------------------------------------------------------------------------------------
+
+
+    let validateObject (obj: CPSObject) (key: string) =
+        if obj.Key.Key = key then
+            Ok obj
+        else
+            Error MismatchingKey

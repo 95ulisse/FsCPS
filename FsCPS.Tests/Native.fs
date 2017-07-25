@@ -135,9 +135,11 @@ module Native =
                     >>= (fun path ->
                         match managedObj.GetAttribute(path) with
                         | None -> Ok(false, 0)
-                        | Some attr ->
+                        | Some(Leaf(_, attr)) ->
                             NativeMethods.GetAttribute nativeObject attrId
                             |>> (fun attrValue -> (attrValue = attr, count + 1))
+                        | _ ->
+                            invalidOp "Testing works only for leafs at the moment"
                     )
                     |> function
                         | Ok x -> x

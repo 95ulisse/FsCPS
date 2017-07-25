@@ -1,6 +1,4 @@
-﻿[<AutoOpen>]
-module FsCPS.Util
-
+﻿namespace FsCPS
 
 type Result<'TOk, 'TError> =
 | Ok of 'TOk
@@ -12,6 +10,11 @@ module internal Result =
         match opt with
         | Some x -> Ok x
         | None -> Error ()
+
+    let toOption res =
+        match res with
+        | Ok x -> Some x
+        | Error _ -> None
 
     let bind f res =
         match res with
@@ -55,23 +58,26 @@ module internal Result =
         | Error x -> res
 
 
-let internal (>>=) res f =
-    Result.bind f res
+[<AutoOpen>]
+module internal Util =
+
+    let internal (>>=) res f =
+        Result.bind f res
 
 
-let internal (|>>) res f =
-    Result.map f res
+    let internal (|>>) res f =
+        Result.map f res
 
 
-let internal isNull value =
-    match value with
-    | null -> true
-    | _ -> false
+    let internal isNull value =
+        match value with
+        | null -> true
+        | _ -> false
 
 
-let internal foldResult f initialState xs =
-    xs |> Seq.fold (fun state x ->
-        match state with
-        | Ok s -> f s x
-        | Error _ -> state
-    ) (Ok(initialState))
+    let internal foldResult f initialState xs =
+        xs |> Seq.fold (fun state x ->
+            match state with
+            | Ok s -> f s x
+            | Error _ -> state
+        ) (Ok(initialState))

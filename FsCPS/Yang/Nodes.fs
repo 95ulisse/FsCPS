@@ -139,7 +139,13 @@ and YANGParserOptions() as this =
         // and then store the module in the cache.
         |> Result.bind storeModuleInCache
 
+    // By default, report an error on an unknown statement
+    let defaultUnknownStatement stmt =
+        Error([ UnexpectedStatement(stmt) ])
+
     member val ResolveImport: string -> DateTime option -> SchemaParserResult<YANGModule> = defaultResolveImport with get, set
+
+    member val UnknownStatement: Statement -> SchemaParserResult<unit> = defaultUnknownStatement with get, set
 
 
 /// Scope of a single statement.

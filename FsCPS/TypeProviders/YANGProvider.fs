@@ -10,12 +10,16 @@ open System.Text.RegularExpressions
 open Microsoft.FSharp.Core.CompilerServices
 open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Quotations.Patterns
+open Microsoft.FSharp.Quotations.DerivedPatterns
+open Microsoft.FSharp.Quotations.ExprShape
+open Microsoft.FSharp.Reflection
 open ProviderImplementation
 open ProviderImplementation.ProvidedTypes
 open ProviderImplementation.ProvidedTypes.UncheckedQuotations
 open FsCPS
 open FsCPS.Yang
-open FsCPS.TypeProviders.Runtime.YANGProviderRuntime
+open FsCPS.TypeProviders
+open FsCPS.TypeProviders.Runtime
 
 #if DEBUG
 open ProviderImplementation.ProvidedTypesTesting
@@ -27,26 +31,29 @@ type internal YANGProviderGenerationContext() =
     let typeStack = Stack<ProvidedTypeDefinition>()
     let pathStack = Stack<CPSPath>()
 
-    member this.Push(node, t, path) =
+    member __.Push(node, t, path) =
         nodeStack.Push(node)
         typeStack.Push(t)
         pathStack.Push(path)
 
-    member this.Pop() =
+    member __.Pop() =
         nodeStack.Pop() |> ignore
         typeStack.Pop() |> ignore
         pathStack.Pop() |> ignore
 
-    member this.CurrentNode
+    member __.CurrentNode
         with get() = nodeStack.Peek()
 
-    member this.CurrentType
+    member __.CurrentType
         with get() = typeStack.Peek()
 
-    member this.CurrentPath
+    member __.CurrentPath
         with get() = pathStack.Peek()
+
+    member __.RootType
+        with get() = typeStack |> Seq.last
         
-    member this.IsEmpty
+    member __.IsEmpty
         with get() = nodeStack.Count = 0
 
 
@@ -75,10 +82,13 @@ type YANGProvider(config: TypeProviderConfig) as this =
             .Trim([| '-'; '.' |])
 
     let makeOptionType t =
-        typedefof<option<_>>.MakeGenericType([| t |])
+        factory.MakeGenericType(typedefof<option<_>>, [ t ])
 
     let makeListType t =
-        typedefof<list<_>>.MakeGenericType([| t |])
+        factory.MakeGenericType(typedefof<list<_>>, [ t ])
+
+    let makeValidationResultType t =
+        factory.MakeGenericType(typedefof<Result<_, _>>, [ t; typeof<ValidationError> ])
 
 
     // Returns the actual type to use for the given YANG type.
@@ -107,7 +117,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
     /// Generetes a new type for container nodes.
     let rec generateContainerType (ctx: YANGProviderGenerationContext) (container: YANGDataNodeContainer) =
         
-        // Crate a new type with the same name of the container and add it to the parent type
+        // Crate a new type with the same name of the container and add it to the parent type.
+        // Add also factory methods to the root type.
         let newType =
             factory.ProvidedTypeDefinition(
                 normalizeName container.Name.Name,
@@ -115,11 +126,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 hideObjectMethods = true,
                 nonNullable = true
             )
-            |> generateCommonMembers
         ctx.CurrentType.AddMember(newType)
         
         // Recursively generate the types 
         ctx.Push(container, newType, ctx.CurrentPath.Append(container.Name.Name))
+        generateCommonMembers ctx true newType
         container.DataNodes |> Seq.iter (generateTypesForNode ctx)
         ctx.Pop()
         
@@ -131,7 +142,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
     // - A constructor requiring a CPSKey to create a backing CPSObject.
     // - Some other overloads for the last constructor.
     // - A CPSObject property to extract the underlying CPSObject.
-    and generateCommonMembers (t: ProvidedTypeDefinition) =
+    // - Some factory methods in the root type.
+    and generateCommonMembers (ctx: YANGProviderGenerationContext) generateFactoryMethods (t: ProvidedTypeDefinition) =
         let ctor1 =
             factory.ProvidedConstructor(
                 [ factory.ProvidedParameter("obj", typeof<CPSObject>) ],
@@ -167,28 +179,76 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
         t.AddMembers([ ctor1; ctor2; ctor3; ctor4 ])
         t.AddMember(objProp)
-        t
+
+        // Adds the corresponding factory methods to the root type
+        if generateFactoryMethods then
+            
+            // We must be sure that the name we choose for the method is unique.
+            let methodName =
+                seq {
+                    let mutable name = String.Empty
+                    let mutable parent = ctx.CurrentType :> Type
+                    while not (isNull parent) do
+                        name <- parent.Name + name
+                        parent <- parent.DeclaringType
+                        yield name
+                }
+                |> Seq.find (fun name ->
+                    ctx.RootType.GetMethods()
+                    |> Array.exists (fun m -> m.Name = name)
+                    |> not
+                )
+
+            let pathExpr = Expr.Value(ctx.CurrentPath.ToString(), typeof<string>)
+            let keyExpr = Expr.Value(CPSKey(CPSQualifier.Target, ctx.CurrentPath).Key, typeof<string>)
+
+            // The parameterless method constructs a new object
+            let parameterlessFactoryMethod =
+                factory.ProvidedMethod(
+                    methodName,
+                    [],
+                    t,
+                    (fun args -> Expr.NewObjectUnchecked(ctor3, [ <@@ CPSPath %%(pathExpr) @@> ])),
+                    isStatic = true
+                )
+
+            // The other method takes an existing object and performs some validation
+            let returnType = makeValidationResultType t
+            let fromObjectFactoryMethod =
+                factory.ProvidedMethod(
+                    methodName,
+                    [ factory.ProvidedParameter("obj", typeof<CPSObject>) ],
+                    returnType,
+                    (fun args ->
+                        let unboxMethod = match <@@ unbox @@> with Lambda(_, Call(_, m, _)) -> m | _ -> failwith "Unreachable"
+                        let q = <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
+                        Expr.Call(factory.MakeGenericMethod(unboxMethod.GetGenericMethodDefinition(), [ returnType ]), [ q ])
+                    ),
+                    isStatic = true
+                )
+
+            ctx.RootType.AddMembers [ parameterlessFactoryMethod; fromObjectFactoryMethod ]
         
 
     // Common getter for leaf data nodes.
     and leafPropertyGetter t path (args: Quotations.Expr list) =
-        let expr = <@@ readLeaf<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
+        let expr = <@@ YANGProviderRuntime.readLeaf<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
         
         // Be sure that we call the `readLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, args) ->
-            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), args)
+            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
         | _ ->
             failwith "Should never be reached"
 
     // Common setter for leaf data nodes.
     and leafPropertySetter t path (args: Quotations.Expr list) =
-        let expr = <@@ writeLeaf<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
+        let expr = <@@ YANGProviderRuntime.writeLeaf<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
         
         // Be sure that we call the `writeLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, [ arg1; _; arg3 ]) ->
-            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
+            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
         | _ ->
             failwith "Should never be reached"
             
@@ -208,23 +268,23 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
     // Common getter for leaf-list nodes
     and leafListPropertyGetter t path (args: Quotations.Expr list) =
-        let expr = <@@ readLeafList<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
+        let expr = <@@ YANGProviderRuntime.readLeafList<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
         
         // Be sure that we call the `readLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, args) ->
-            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), args)
+            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
         | _ ->
             failwith "Should never be reached"
 
     // Common setter for leaf-list nodes
     and leafListPropertySetter t path (args: Quotations.Expr list) =
-        let expr = <@@ writeLeafList<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
+        let expr = <@@ YANGProviderRuntime.writeLeafList<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
         
         // Be sure that we call the `writeLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, [ arg1; _; arg3 ]) ->
-            Expr.Call(mtd.GetGenericMethodDefinition().MakeGenericMethod([| t |]), [ arg1; args.[1]; arg3 ])
+            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
         | _ ->
             failwith "Should never be reached"
 
@@ -319,11 +379,13 @@ type YANGProvider(config: TypeProviderConfig) as this =
         // Generates the root type
         let rootType =
             factory.ProvidedTypeDefinition(asm, ns, typeName, Some typeof<CPSObject>, hideObjectMethods = true, nonNullable = true)
-            |> generateCommonMembers
 
         // Creates a new generation context
         let ctx = YANGProviderGenerationContext()
         ctx.Push(m, rootType, CPSPath(rootPath))
+
+        // Generates common members for the root type
+        generateCommonMembers ctx false rootType |> ignore
 
         // Generates the subtypes from the other data nodes
         m.DataNodes |> Seq.iter (generateTypesForNode ctx)
@@ -333,8 +395,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
         if not ctx.IsEmpty then
             failwith "YANGProviderGenerationContext is not balanced"
 
-        //Testing.FormatProvidedType(rootType, signatureOnly = false, ignoreOutput = false, useQualifiedNames = false)
-        //|> printf "%s\n"
+        try
+            Testing.FormatProvidedType(rootType, signatureOnly = false, ignoreOutput = false, useQualifiedNames = false)
+            |> printf "%s\n"
+        with
+        | e -> printf "ERROR: %O" e
 
         rootType
 
@@ -344,12 +409,18 @@ type YANGProvider(config: TypeProviderConfig) as this =
             match args with
             | [| :? string as model; :? string as fileName; :? string as rootPath |] ->
         
+                // Parser options
+                let options = YANGParserOptions(
+                                  // Ignore unknown statements
+                                  UnknownStatement = fun _ -> Ok ()
+                              )
+
                 // Loads the model inline or from a file
                 let m =
                     if not (String.IsNullOrEmpty(model)) then
-                        YANGParser.ParseModule(model)
+                        YANGParser.ParseModule(model, options)
                     else if not (String.IsNullOrEmpty(fileName)) then
-                        using (File.OpenRead(fileName)) YANGParser.ParseModule
+                        using (File.OpenRead(fileName)) (fun s -> YANGParser.ParseModule(s, options))
                     else
                         invalidOp "Please, provide a YANG model inline or specify the name of a file."
 

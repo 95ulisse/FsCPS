@@ -202,7 +202,10 @@ let anyOf (childrenDesc: StatementSpec<'a> list) : SchemaParser<'a> =
                             | Ok(_) -> Ok(parentNode)
                             | Error(l) -> Error(l)
 
-                    | None -> Error([ UnexpectedStatement(c) ])
+                    | None ->
+                        // Let the options decide what to do with the unknown statement
+                        ctx.Options.UnknownStatement c
+                        |>> (fun _ -> parentNode)
                 | Error(_) -> acc
             ) (Ok(parentNode))
         
@@ -310,7 +313,7 @@ let unorderedGroups (childrenSpec: StatementSpec<'a> list list) : SchemaParser<'
         | Error(_) -> ()
         | Ok(_) ->
             if index < parentStatement.Children.Count then
-                result <- Error([ UnexpectedStatement(parentStatement.Children.[index]) ])
+                result <- ctx.Options.UnknownStatement parentStatement.Children.[index] |>> (fun _ -> parentNode)
 
         result
 

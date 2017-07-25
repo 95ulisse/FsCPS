@@ -59,7 +59,7 @@ module dell-base-vlan {
     }
 
 
-	container entry {
+	list entry {
 	
 		leaf id {
 			type vlan-id;
