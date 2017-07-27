@@ -57,9 +57,6 @@
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="ProviderImplementation\ProvidedTypes.fsi" />
     <Compile Include="ProviderImplementation\ProvidedTypes.fs" />
-    <Compile Include="ProviderImplementation\AssemblyReader.fs" />
-    <Compile Include="ProviderImplementation\AssemblyReaderReflection.fs" />
-    <Compile Include="ProviderImplementation\ProvidedTypesContext.fs" />
     <Compile Include="ProviderImplementation\ProvidedTypesTesting.fs" />
     <Compile Include="Util.fs" />
     <Compile Include="Native.fs" />

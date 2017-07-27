@@ -63,9 +63,9 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
     let ns = "FsCPS.TypeProviders"
     let asm = Assembly.GetExecutingAssembly()
-    let factory = ProvidedTypesContext.Create(config)
-
-    let yangProviderType = factory.ProvidedTypeDefinition(asm, ns, "YANGProvider", None, hideObjectMethods = true, nonNullable = true)
+    
+    let yangProviderType = ProvidedTypeDefinition(asm, ns, "YANGProvider", None, HideObjectMethods = true)
+    
     let staticParams =
         [
             ProvidedStaticParameter("model", typeof<string>, "");
@@ -82,13 +82,13 @@ type YANGProvider(config: TypeProviderConfig) as this =
             .Trim([| '-'; '.' |])
 
     let makeOptionType t =
-        factory.MakeGenericType(typedefof<option<_>>, [ t ])
+        ProvidedTypeBuilder.MakeGenericType(typedefof<option<_>>, [ t ])
 
     let makeListType t =
-        factory.MakeGenericType(typedefof<list<_>>, [ t ])
+        ProvidedTypeBuilder.MakeGenericType(typedefof<list<_>>, [ t ])
 
     let makeValidationResultType t =
-        factory.MakeGenericType(typedefof<Result<_, _>>, [ t; typeof<ValidationError> ])
+        ProvidedTypeBuilder.MakeGenericType(typedefof<Result<_, _>>, [ t; typeof<ValidationError> ])
 
 
     // Returns the actual type to use for the given YANG type.
@@ -119,13 +119,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Crate a new type with the same name of the container and add it to the parent type.
         // Add also factory methods to the root type.
-        let newType =
-            factory.ProvidedTypeDefinition(
-                normalizeName container.Name.Name,
-                Some typeof<CPSObject>,
-                hideObjectMethods = true,
-                nonNullable = true
-            )
+        let newType = ProvidedTypeDefinition(normalizeName container.Name.Name, Some typeof<CPSObject>, HideObjectMethods = true)
         ctx.CurrentType.AddMember(newType)
         
         // Recursively generate the types 
@@ -145,36 +139,35 @@ type YANGProvider(config: TypeProviderConfig) as this =
     // - Some factory methods in the root type.
     and generateCommonMembers (ctx: YANGProviderGenerationContext) generateFactoryMethods (t: ProvidedTypeDefinition) =
         let ctor1 =
-            factory.ProvidedConstructor(
-                [ factory.ProvidedParameter("obj", typeof<CPSObject>) ],
-                (fun args -> <@@ %%(args.[0]) : CPSObject @@>)
+            ProvidedConstructor(
+                [ ProvidedParameter("obj", typeof<CPSObject>) ],
+                InvokeCode = (fun args -> <@@ %%(args.[0]) : CPSObject @@>)
             )
         let ctor2 =
-            factory.ProvidedConstructor(
-                [ factory.ProvidedParameter("key", typeof<CPSKey>) ],
-                (fun args -> <@@ CPSObject(%%(args.[0]) : CPSKey) @@>)
+            ProvidedConstructor(
+                [ ProvidedParameter("key", typeof<CPSKey>) ],
+                InvokeCode = (fun args -> <@@ CPSObject(%%(args.[0]) : CPSKey) @@>)
             )
         let ctor3 =
-            factory.ProvidedConstructor(
-                [ factory.ProvidedParameter("path", typeof<CPSPath>) ],
-                (fun args -> <@@ CPSObject(%%(args.[0]) : CPSPath) @@>)
+            ProvidedConstructor(
+                [ ProvidedParameter("path", typeof<CPSPath>) ],
+                InvokeCode = (fun args -> <@@ CPSObject(%%(args.[0]) : CPSPath) @@>)
             )
         let ctor4 =
-            factory.ProvidedConstructor(
+            ProvidedConstructor(
                 [
-                    factory.ProvidedParameter("path", typeof<CPSPath>);
-                    factory.ProvidedParameter("qual", typeof<CPSQualifier>)
+                    ProvidedParameter("path", typeof<CPSPath>);
+                    ProvidedParameter("qual", typeof<CPSQualifier>)
                 ],
-                (fun args -> <@@ CPSObject((%%(args.[0]) : CPSPath), (%%(args.[1]) : CPSQualifier)) @@>)
+                InvokeCode = (fun args -> <@@ CPSObject((%%(args.[0]) : CPSPath), (%%(args.[1]) : CPSQualifier)) @@>)
             )
         
         let objProp =
-            factory.ProvidedMethod(
+            ProvidedMethod(
                 "ToCPSObject",
                 [],
                 typeof<CPSObject>,
-                (fun args -> <@@ %%(args.[0]) : CPSObject @@>),
-                isStatic = false
+                InvokeCode = (fun args -> <@@ %%(args.[0]) : CPSObject @@>)
             )
 
         t.AddMembers([ ctor1; ctor2; ctor3; ctor4 ])
@@ -204,27 +197,27 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
             // The parameterless method constructs a new object
             let parameterlessFactoryMethod =
-                factory.ProvidedMethod(
+                ProvidedMethod(
                     methodName,
                     [],
                     t,
-                    (fun args -> Expr.NewObjectUnchecked(ctor3, [ <@@ CPSPath %%(pathExpr) @@> ])),
-                    isStatic = true
+                    InvokeCode = (fun args -> Expr.NewObjectUnchecked(ctor3, [ <@@ CPSPath %%(pathExpr) @@> ])),
+                    IsStaticMethod = true
                 )
 
             // The other method takes an existing object and performs some validation
             let returnType = makeValidationResultType t
             let fromObjectFactoryMethod =
-                factory.ProvidedMethod(
+                ProvidedMethod(
                     methodName,
-                    [ factory.ProvidedParameter("obj", typeof<CPSObject>) ],
+                    [ ProvidedParameter("obj", typeof<CPSObject>) ],
                     returnType,
-                    (fun args ->
+                    InvokeCode = (fun args ->
                         let unboxMethod = match <@@ unbox @@> with Lambda(_, Call(_, m, _)) -> m | _ -> failwith "Unreachable"
                         let q = <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
-                        Expr.Call(factory.MakeGenericMethod(unboxMethod.GetGenericMethodDefinition(), [ returnType ]), [ q ])
+                        Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(unboxMethod.GetGenericMethodDefinition(), [ returnType ]), [ q ])
                     ),
-                    isStatic = true
+                    IsStaticMethod = true
                 )
 
             ctx.RootType.AddMembers [ parameterlessFactoryMethod; fromObjectFactoryMethod ]
@@ -237,7 +230,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         // Be sure that we call the `readLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, args) ->
-            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
+            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
         | _ ->
             failwith "Should never be reached"
 
@@ -248,7 +241,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         // Be sure that we call the `writeLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, [ arg1; _; arg3 ]) ->
-            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
+            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
         | _ ->
             failwith "Should never be reached"
             
@@ -273,7 +266,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         // Be sure that we call the `readLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, args) ->
-            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
+            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
         | _ ->
             failwith "Should never be reached"
 
@@ -284,7 +277,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         // Be sure that we call the `writeLeaf` method with the correct generic parameter
         match expr with
         | Call(None, mtd, [ arg1; _; arg3 ]) ->
-            Expr.Call(factory.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
+            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
         | _ ->
             failwith "Should never be reached"
 
@@ -310,11 +303,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
             // Adds an instance property to the parent type for the leaf
             let prop =
-                factory.ProvidedProperty(
+                ProvidedProperty(
                     normalizeName leaf.Name.Name,
                     makeOptionType leafType,
-                    leafPropertyGetter leafType (ctx.CurrentPath.Append(leaf.Name.Name).ToString()),
-                    leafPropertySetter leafType (ctx.CurrentPath.Append(leaf.Name.Name).ToString())
+                    GetterCode = leafPropertyGetter leafType (ctx.CurrentPath.Append(leaf.Name.Name).ToString()),
+                    SetterCode = leafPropertySetter leafType (ctx.CurrentPath.Append(leaf.Name.Name).ToString())
                 )
             if not (isNull leaf.Description) then
                 prop.AddXmlDoc(leaf.Description)
@@ -327,10 +320,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
             
             // Adds an instance property to the parent type for the container
             let prop =
-                factory.ProvidedProperty(
+                ProvidedProperty(
                     normalizeName container.Name.Name,
                     containerType,
-                    containerPropertyGetter containerType
+                    GetterCode = containerPropertyGetter containerType
                 )
             if not (isNull container.Description) then
                 prop.AddXmlDoc(container.Description)
@@ -343,11 +336,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
             // Adds an instance property to the parent type for the leaf
             let prop =
-                factory.ProvidedProperty(
+                ProvidedProperty(
                     normalizeName leafList.Name.Name,
                     makeOptionType (makeListType leafType),
-                    leafListPropertyGetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString()),
-                    leafListPropertySetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString())
+                    GetterCode = leafListPropertyGetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString()),
+                    SetterCode = leafListPropertySetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString())
                 )
             if not (isNull leafList.Description) then
                 prop.AddXmlDoc(leafList.Description)
@@ -360,11 +353,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
             // Adds an instance property to the parent type for the list
             let prop =
-                factory.ProvidedProperty(
+                ProvidedProperty(
                     normalizeName list.Name.Name,
                     makeListType containerType,
-                    listPropertyGetter containerType,
-                    listPropertySetter containerType
+                    GetterCode = listPropertyGetter containerType,
+                    SetterCode = listPropertySetter containerType
                 )
             if not (isNull list.Description) then
                 prop.AddXmlDoc(list.Description)
@@ -378,7 +371,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Generates the root type
         let rootType =
-            factory.ProvidedTypeDefinition(asm, ns, typeName, Some typeof<CPSObject>, hideObjectMethods = true, nonNullable = true)
+            ProvidedTypeDefinition(asm, ns, typeName, Some typeof<CPSObject>, HideObjectMethods = true)
 
         // Creates a new generation context
         let ctx = YANGProviderGenerationContext()
@@ -435,4 +428,4 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
             | _ -> failwith "Unsupported static parameters."
         ))
-        this.AddNamespace(ns, [yangProviderType])
+        this.AddNamespace(ns, [ yangProviderType ])
