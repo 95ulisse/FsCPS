@@ -26,6 +26,9 @@ open ProviderImplementation.ProvidedTypesTesting
 #endif
 
 
+type private ErasedType = (CPSObject * AttributePathSegment list * int list)
+
+
 type internal YANGProviderGenerationContext() =
     let nodeStack = Stack<YANGNode>()
     let typeStack = Stack<ProvidedTypeDefinition>()
@@ -90,6 +93,44 @@ type YANGProvider(config: TypeProviderConfig) as this =
     let makeValidationResultType t =
         ProvidedTypeBuilder.MakeGenericType(typedefof<Result<_, _>>, [ t; typeof<ValidationError> ])
 
+    let patchMethodCallWithOther template replacer expr =
+
+        // We could have used the SpecificCall pattern, but it does not pass the MethodInfo, and we need it.
+        let (templateMethod, templateIsGeneric) =
+            match template with
+            | Lambda(_, Call(_, m, _)) | Call(_, m, _) ->
+                if m.IsGenericMethod then
+                    (m.GetGenericMethodDefinition(), true)
+                else
+                    (m, false)
+            | _ ->
+                failwith "Invalid call template"
+
+        let rec f =
+            function
+            | Call (receiver, method, args)
+                // Checks if it's the method we have to patch
+                when (
+                      if templateIsGeneric then
+                          method.IsGenericMethod && templateMethod = method.GetGenericMethodDefinition()
+                      else
+                          templateMethod = method) ->
+
+                replacer receiver method (args |> List.map f)
+
+            | ShapeVar v -> Expr.Var(v)
+            | ShapeLambda (v, body) -> Expr.Lambda(v, f body)
+            | ShapeCombination (obj, exprs) -> RebuildShapeCombination(obj, exprs |> List.map f)
+
+        f expr
+
+    let patchMethodCall template replacer =
+        patchMethodCallWithOther template <| fun receiver method args ->
+                                                 let (newMethod, newArgs) = replacer method args
+                                                 match receiver with
+                                                 | Some r -> Expr.Call(r, newMethod, newArgs)
+                                                 | None -> Expr.Call(newMethod, newArgs)
+
 
     // Returns the actual type to use for the given YANG type.
     // Tries to use pritive types as far as it can, otherwise (like in the case
@@ -119,7 +160,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Crate a new type with the same name of the container and add it to the parent type.
         // Add also factory methods to the root type.
-        let newType = ProvidedTypeDefinition(normalizeName container.Name.Name, Some typeof<CPSObject>, HideObjectMethods = true)
+        let newType = ProvidedTypeDefinition(normalizeName container.Name.Name, Some typeof<ErasedType>, HideObjectMethods = true)
         ctx.CurrentType.AddMember(newType)
         
         // Recursively generate the types 
@@ -140,26 +181,13 @@ type YANGProvider(config: TypeProviderConfig) as this =
     and generateCommonMembers (ctx: YANGProviderGenerationContext) generateFactoryMethods (t: ProvidedTypeDefinition) =
         let ctor1 =
             ProvidedConstructor(
-                [ ProvidedParameter("obj", typeof<CPSObject>) ],
-                InvokeCode = (fun args -> <@@ %%(args.[0]) : CPSObject @@>)
+                [ ProvidedParameter("obj", typeof<ErasedType>) ],
+                InvokeCode = (fun args -> <@@ %%(args.[0]) : ErasedType @@>)
             )
         let ctor2 =
             ProvidedConstructor(
-                [ ProvidedParameter("key", typeof<CPSKey>) ],
-                InvokeCode = (fun args -> <@@ CPSObject(%%(args.[0]) : CPSKey) @@>)
-            )
-        let ctor3 =
-            ProvidedConstructor(
                 [ ProvidedParameter("path", typeof<CPSPath>) ],
-                InvokeCode = (fun args -> <@@ CPSObject(%%(args.[0]) : CPSPath) @@>)
-            )
-        let ctor4 =
-            ProvidedConstructor(
-                [
-                    ProvidedParameter("path", typeof<CPSPath>);
-                    ProvidedParameter("qual", typeof<CPSQualifier>)
-                ],
-                InvokeCode = (fun args -> <@@ CPSObject((%%(args.[0]) : CPSPath), (%%(args.[1]) : CPSQualifier)) @@>)
+                InvokeCode = (fun args -> <@@ (CPSObject(%%(args.[0]) : CPSPath), List.empty<AttributePathSegment>, List.empty<int>) @@>)
             )
         
         let objProp =
@@ -167,10 +195,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 "ToCPSObject",
                 [],
                 typeof<CPSObject>,
-                InvokeCode = (fun args -> <@@ %%(args.[0]) : CPSObject @@>)
+                InvokeCode = (fun args -> <@@ let (o, _, _) = %%(args.[0]) : ErasedType in o @@>)
             )
 
-        t.AddMembers([ ctor1; ctor2; ctor3; ctor4 ])
+        t.AddMembers([ ctor1; ctor2; ])
         t.AddMember(objProp)
 
         // Adds the corresponding factory methods to the root type
@@ -201,7 +229,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                     methodName,
                     [],
                     t,
-                    InvokeCode = (fun args -> Expr.NewObjectUnchecked(ctor3, [ <@@ CPSPath %%(pathExpr) @@> ])),
+                    InvokeCode = (fun args -> Expr.NewObject(ctor2, [ <@@ CPSPath %%(pathExpr) @@> ])),
                     IsStaticMethod = true
                 )
 
@@ -213,9 +241,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
                     [ ProvidedParameter("obj", typeof<CPSObject>) ],
                     returnType,
                     InvokeCode = (fun args ->
-                        let unboxMethod = match <@@ unbox @@> with Lambda(_, Call(_, m, _)) -> m | _ -> failwith "Unreachable"
-                        let q = <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
-                        Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(unboxMethod.GetGenericMethodDefinition(), [ returnType ]), [ q ])
+                        //let unboxMethod = match <@@ unbox @@> with Lambda(_, Call(_, m, _)) -> m | _ -> failwith "Unreachable"
+                        //let q = <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
+                        //Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(unboxMethod.GetGenericMethodDefinition(), [ returnType ]), [ q ])
+                        <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
                     ),
                     IsStaticMethod = true
                 )
@@ -224,70 +253,93 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
 
     // Common getter for leaf data nodes.
-    and leafPropertyGetter t path (args: Quotations.Expr list) =
-        let expr = <@@ YANGProviderRuntime.readLeaf<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
-        
-        // Be sure that we call the `readLeaf` method with the correct generic parameter
-        match expr with
-        | Call(None, mtd, args) ->
-            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
-        | _ ->
-            failwith "Should never be reached"
+    and leafPropertyGetter t currentPath (args: Quotations.Expr list) =
+        <@@
+            // Adds the current path to the attribute segments and gets/sets the value
+            let (obj, path, indices) = %%(args.[0]) : ErasedType
+            let newPath = List.rev (Access currentPath :: path)
+            YANGProviderRuntime.readLeaf<obj> newPath indices obj
+        @@>
+
+        // Ensure that the core method is called with the correct generic parameter
+        |> patchMethodCall
+               <@@ YANGProviderRuntime.readLeaf [] [] Unchecked.defaultof<_> @@>
+               (fun m args -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), args))
 
     // Common setter for leaf data nodes.
-    and leafPropertySetter t path (args: Quotations.Expr list) =
-        let expr = <@@ YANGProviderRuntime.writeLeaf<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
-        
-        // Be sure that we call the `writeLeaf` method with the correct generic parameter
-        match expr with
-        | Call(None, mtd, [ arg1; _; arg3 ]) ->
-            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
-        | _ ->
-            failwith "Should never be reached"
+    and leafPropertySetter t currentPath (args: Quotations.Expr list) =
+        <@@
+            // Adds the current path to the attribute segments and gets/sets the value
+            let (obj, path, indices) = %%(args.[0]) : ErasedType
+            let newPath = List.rev (Access currentPath :: path)
+            YANGProviderRuntime.writeLeaf<obj> newPath indices None obj
+        @@>
+
+        // Ensure that the core method is called with the correct generic parameter
+        |> patchMethodCall
+               <@@ YANGProviderRuntime.writeLeaf [] [] None Unchecked.defaultof<_> @@>
+               (fun m (arg1 :: arg2 :: _ :: arg4 :: []) -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]),
+                                                            [ arg1; arg2; args.[1]; arg4 ]))
+
+    // Common getter for leaf-list nodes
+    and leafListPropertyGetter t currentPath (args: Quotations.Expr list) =
+        <@@
+            // Adds the current path to the attribute segments and gets/sets the value
+            let (obj, path, indices) = %%(args.[0]) : ErasedType
+            let newPath = List.rev (Access currentPath :: path)
+            YANGProviderRuntime.readLeafList<obj> newPath indices obj
+        @@>
+
+        // Ensure that the core method is called with the correct generic parameter
+        |> patchMethodCall
+               <@@ YANGProviderRuntime.readLeafList [] [] Unchecked.defaultof<_> @@>
+               (fun m args -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), args))
+
+    // Common setter for leaf-list nodes
+    and leafListPropertySetter t currentPath (args: Quotations.Expr list) =
+        <@@
+            // Adds the current path to the attribute segments and gets/sets the value
+            let (obj, path, indices) = %%(args.[0]) : ErasedType
+            let newPath = List.rev (Access currentPath :: path)
+            YANGProviderRuntime.writeLeafList<obj> newPath indices None obj
+        @@>
+
+        // Ensure that the core method is called with the correct generic parameter
+        |> patchMethodCall
+               <@@ YANGProviderRuntime.writeLeafList [] [] None Unchecked.defaultof<_> @@>
+               (fun m (arg1 :: arg2 :: _ :: arg4 :: []) -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]),
+                                                            [ arg1; arg2; args.[1]; arg4 ]))
             
     // Common getter for container nodes
-    and containerPropertyGetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
-        // This is a manual construction for:
-        // <@@ new t(args.[0] : CPSObject) @@>
+    and containerPropertyGetter (t: Type) currentPath (args: Quotations.Expr list) =
+        
+        // Constructor for the container type
         let ctor =
             t.GetMembers(BindingFlags.Instance ||| BindingFlags.Public)
             |> Array.find (fun m ->
                 m.MemberType = MemberTypes.Constructor && (
                     let pars = (m :?> ConstructorInfo).GetParameters()
-                    pars.Length = 1 && pars.[0].ParameterType.Name.Contains(typeof<CPSObject>.Name)
-                ) 
+                    pars.Length = 1 && pars.[0].ParameterType = typeof<ErasedType>
+                )
             )
-        Expr.NewObjectUnchecked(ctor :?> ConstructorInfo, [ args.[0] ])
-
-    // Common getter for leaf-list nodes
-    and leafListPropertyGetter t path (args: Quotations.Expr list) =
-        let expr = <@@ YANGProviderRuntime.readLeafList<obj> (CPSPath path) (%%(args.[0]) : CPSObject) @@>
+            :?> ConstructorInfo
         
-        // Be sure that we call the `readLeaf` method with the correct generic parameter
-        match expr with
-        | Call(None, mtd, args) ->
-            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), args)
-        | _ ->
-            failwith "Should never be reached"
+        <@@
+            // Constructs a new instance of the erased type passing the same object,
+            // but adding a segment to the access path.
+            let (obj, path, indices) = %%(args.[0]) : ErasedType
+            let newPath = Access currentPath :: path
+            ignore (obj, newPath, indices)
+        @@>
 
-    // Common setter for leaf-list nodes
-    and leafListPropertySetter t path (args: Quotations.Expr list) =
-        let expr = <@@ YANGProviderRuntime.writeLeafList<obj> (CPSPath path) None (%%(args.[0]) : CPSObject) @@>
-        
-        // Be sure that we call the `writeLeaf` method with the correct generic parameter
-        match expr with
-        | Call(None, mtd, [ arg1; _; arg3 ]) ->
-            Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(mtd.GetGenericMethodDefinition(), [ t ]), [ arg1; args.[1]; arg3 ])
-        | _ ->
-            failwith "Should never be reached"
+        // Replace the call to `ignore` with the actual constructor call.
+        |> patchMethodCallWithOther
+               <@@ ignore @@>
+               (fun _ _ args -> Expr.NewObject(ctor, args))
 
     // Common getter for list nodes
     and listPropertyGetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
         <@@ raise (NotImplementedException "List getters not implemented yet.") @@>
-
-    // Common setter for list nodes
-    and listPropertySetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
-        <@@ raise (NotImplementedException "List setters not implemented yet.") @@>
 
 
     // Adds new members to the given parent type from the given data node.
@@ -323,7 +375,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName container.Name.Name,
                     containerType,
-                    GetterCode = containerPropertyGetter containerType
+                    GetterCode = containerPropertyGetter containerType (ctx.CurrentPath.Append(container.Name.Name).ToString())
                 )
             if not (isNull container.Description) then
                 prop.AddXmlDoc(container.Description)
@@ -356,8 +408,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName list.Name.Name,
                     makeListType containerType,
-                    GetterCode = listPropertyGetter containerType,
-                    SetterCode = listPropertySetter containerType
+                    GetterCode = listPropertyGetter containerType
                 )
             if not (isNull list.Description) then
                 prop.AddXmlDoc(list.Description)
@@ -371,7 +422,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Generates the root type
         let rootType =
-            ProvidedTypeDefinition(asm, ns, typeName, Some typeof<CPSObject>, HideObjectMethods = true)
+            ProvidedTypeDefinition(asm, ns, typeName, Some typeof<ErasedType>, HideObjectMethods = true)
 
         // Creates a new generation context
         let ctx = YANGProviderGenerationContext()
@@ -388,11 +439,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
         if not ctx.IsEmpty then
             failwith "YANGProviderGenerationContext is not balanced"
 
-        try
-            Testing.FormatProvidedType(rootType, signatureOnly = false, ignoreOutput = false, useQualifiedNames = false)
-            |> printf "%s\n"
-        with
-        | e -> printf "ERROR: %O" e
+        //try
+        //    Testing.FormatProvidedType(rootType, signatureOnly = false, ignoreOutput = false, useQualifiedNames = false)
+        //    |> printf "%s\n"
+        //with
+        //| e -> printf "ERROR: %O" e
 
         rootType
 
