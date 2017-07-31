@@ -1,0 +1,74 @@
+
+
+module dell-base-ip {
+    namespace "http://www.dell.com/esg/networking/os10/dell-base-ip";
+    prefix "base-ip";
+
+    organization "Dell Inc";
+
+    contact "http://www.dell.com/support/softwarecontacts";
+
+    description "This model will support the configruation of IP address.
+    	***Depreciated****
+
+    	";
+
+    revision 2015-08-12 {
+        description "Initial version.";
+    }
+
+	typedef logical-ifindex {
+        type uint32;
+        description
+            "Uniquely identifies any interface system-wide including
+            physical ports, LAG interfaces and Vlan interfaces";
+    }
+
+    typedef ipv4-address {
+        type binary {
+            length "4";
+        }
+        description
+            "This type denotes a IPv4 address as a 4 octet binary number
+            in network-byte order.";
+    }
+
+	list ipv4 {
+		key "vrf-id ifindex";
+		
+		leaf ifindex {
+	     	type logical-ifindex;
+	      	description "The interface index";
+	    }		
+		leaf enabled {
+			type boolean;
+			description "This is true if IPv4 is enabled.";
+		}		
+		leaf forwarding {
+			type boolean;
+			description "This will be set true if the system has IP forwarding enabled.
+			This will only set the kernel IP forwarding flags.";			
+		}		
+		leaf vrf-id {
+			type uint32;
+			description "A numerical value of the vrf that contains the interface.  Use 0 for the default.";
+		}
+		leaf name {
+			type string;
+			description "The interfaces's name.";
+		}
+		
+		list address {			
+			key "ip";
+		    leaf ip {
+		      	type ipv4-address;
+		      	description "IP address";
+		    }
+		    leaf prefix-length {
+		    	type uint8;
+		    }
+		     			
+		}		
+	}
+	
+}	

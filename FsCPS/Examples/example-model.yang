@@ -81,4 +81,15 @@ module example {
         }
     }
 
+	// A series of nested lists to test correct indices ordering
+	list list-a {
+		list list-b {
+			list list-c {
+				leaf leaf {
+					type int32;
+				}
+			}
+		}
+	}
+
 }

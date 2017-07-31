@@ -112,7 +112,9 @@ type CPSObject(key: CPSKey) =
     member val Key = key
 
     /// Returns all the attributes stored in this object.
-    member val Attributes = attributes
+    member __.Attributes
+        with get() = attributes
+        and internal set(v) = attributes <- v
 
     /// Sets the value of a Leaf attribute using a path relative to the object's key.
     member this.SetAttribute(path: string, v: byte[]) =
@@ -188,7 +190,7 @@ type CPSObject(key: CPSKey) =
 
     /// Sets the value of an attribute.
     member this.SetAttribute(value: CPSAttribute) =
-        attributes <- attributes |> Map.add value.AttributeID value
+        attributes <- Map.add value.AttributeID value attributes
 
     /// Extracts an attribute from this object using a path relative to the object's key.
     member this.GetAttribute(name: string) =

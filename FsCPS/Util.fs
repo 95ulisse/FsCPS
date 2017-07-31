@@ -81,3 +81,11 @@ module internal Util =
             | Ok s -> f s x
             | Error _ -> state
         ) (Ok(initialState))
+
+    let internal foldi f initialState lst =
+        let mutable i = 0
+        lst |> List.fold (fun state x ->
+            let res = f state i x
+            i <- i + 1
+            res
+        ) initialState

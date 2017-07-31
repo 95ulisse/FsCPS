@@ -55,6 +55,9 @@ type internal YANGProviderGenerationContext() =
 
     member __.RootType
         with get() = typeStack |> Seq.last
+
+    member __.TypesSequence
+        with get() = typeStack :> seq<_>
         
     member __.IsEmpty
         with get() = nodeStack.Count = 0
@@ -154,23 +157,73 @@ type YANGProvider(config: TypeProviderConfig) as this =
         | x when x = YANGPrimitiveTypes.Union       -> failwith "Unions not implemented."
         | _ ->
             failwithf "Unexpected primitive type %A." yangType.PrimitiveType.Name
-            
+        
     /// Generetes a new type for container nodes.
     let rec generateContainerType (ctx: YANGProviderGenerationContext) (container: YANGDataNodeContainer) =
         
-        // Crate a new type with the same name of the container and add it to the parent type.
-        // Add also factory methods to the root type.
+        // Crate a new type with the same name of the container.
         let newType = ProvidedTypeDefinition(normalizeName container.Name.Name, Some typeof<ErasedType>, HideObjectMethods = true)
-        ctx.CurrentType.AddMember(newType)
         
-        // Recursively generate the types 
+        // Recursively generate the types.
         ctx.Push(container, newType, ctx.CurrentPath.Append(container.Name.Name))
-        generateCommonMembers ctx true newType
+        generateCommonMembers ctx true
         container.DataNodes |> Seq.iter (generateTypesForNode ctx)
         ctx.Pop()
         
-        newType
-        
+        // In case of a container, just add the type to the parent type,
+        // but if we are dealing with a list, create an intermediary type that acts as a collection.
+        match container with
+        | :? YANGContainer ->
+            
+            ctx.CurrentType.AddMember(newType)
+            newType
+
+        | :? YANGList ->
+
+            // Create a new collection type
+            let collectionType = ProvidedTypeDefinition(newType.Name, Some typeof<ErasedType>, HideObjectMethods = true)
+
+            // Constructor
+            collectionType.AddMember(
+                ProvidedConstructor(
+                    [ ProvidedParameter("obj", typeof<ErasedType>) ],
+                    InvokeCode = (fun args -> <@@ %%(args.[0]) : ErasedType @@>)
+                )
+            )
+
+            // Indexer property
+            collectionType.AddMember(
+                ProvidedProperty(
+                    "Item",
+                    newType,
+                    [ ProvidedParameter("i", typeof<int>) ],
+                    GetterCode = listIndexerGetter newType
+                )
+            )
+
+            // Count property
+            collectionType.AddMember(
+                ProvidedProperty(
+                    "Count",
+                    typeof<int>,
+                    GetterCode = (fun args ->
+                        <@@
+                            let (obj, path, indices) = %%(args.[0]) : ErasedType
+                            let newPath = List.rev path
+                            let newIndices = List.rev indices
+                            YANGProviderRuntime.getListLength newPath newIndices obj
+                        @@>
+                    )
+                )
+            )
+
+            // Adds the actual new type to the collection, and add the collection to the parent type in the context
+            collectionType.AddMember(newType)
+            ctx.CurrentType.AddMember(collectionType)
+            collectionType
+
+        | _ ->
+            failwith "Unreachable"
 
     // Adds the common node members to the given type:
     // - A constructor accepting a CPSObject to use the given object as a backing store.
@@ -178,7 +231,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
     // - Some other overloads for the last constructor.
     // - A CPSObject property to extract the underlying CPSObject.
     // - Some factory methods in the root type.
-    and generateCommonMembers (ctx: YANGProviderGenerationContext) generateFactoryMethods (t: ProvidedTypeDefinition) =
+    and generateCommonMembers (ctx: YANGProviderGenerationContext) generateFactoryMethods =
         let ctor1 =
             ProvidedConstructor(
                 [ ProvidedParameter("obj", typeof<ErasedType>) ],
@@ -198,6 +251,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 InvokeCode = (fun args -> <@@ let (o, _, _) = %%(args.[0]) : ErasedType in o @@>)
             )
 
+        let t = ctx.CurrentType
         t.AddMembers([ ctor1; ctor2; ])
         t.AddMember(objProp)
 
@@ -208,10 +262,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
             let methodName =
                 seq {
                     let mutable name = String.Empty
-                    let mutable parent = ctx.CurrentType :> Type
-                    while not (isNull parent) do
-                        name <- parent.Name + name
-                        parent <- parent.DeclaringType
+                    for t in ctx.TypesSequence do
+                        name <- t.Name + name
                         yield name
                 }
                 |> Seq.find (fun name ->
@@ -241,9 +293,6 @@ type YANGProvider(config: TypeProviderConfig) as this =
                     [ ProvidedParameter("obj", typeof<CPSObject>) ],
                     returnType,
                     InvokeCode = (fun args ->
-                        //let unboxMethod = match <@@ unbox @@> with Lambda(_, Call(_, m, _)) -> m | _ -> failwith "Unreachable"
-                        //let q = <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
-                        //Expr.Call(ProvidedTypeBuilder.MakeGenericMethod(unboxMethod.GetGenericMethodDefinition(), [ returnType ]), [ q ])
                         <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
                     ),
                     IsStaticMethod = true
@@ -258,7 +307,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
             // Adds the current path to the attribute segments and gets/sets the value
             let (obj, path, indices) = %%(args.[0]) : ErasedType
             let newPath = List.rev (Access currentPath :: path)
-            YANGProviderRuntime.readLeaf<obj> newPath indices obj
+            let newIndices = List.rev indices
+            YANGProviderRuntime.readLeaf<obj> newPath newIndices obj
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -272,7 +322,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
             // Adds the current path to the attribute segments and gets/sets the value
             let (obj, path, indices) = %%(args.[0]) : ErasedType
             let newPath = List.rev (Access currentPath :: path)
-            YANGProviderRuntime.writeLeaf<obj> newPath indices None obj
+            let newIndices = List.rev indices
+            YANGProviderRuntime.writeLeaf<obj> newPath newIndices None obj
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -287,7 +338,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
             // Adds the current path to the attribute segments and gets/sets the value
             let (obj, path, indices) = %%(args.[0]) : ErasedType
             let newPath = List.rev (Access currentPath :: path)
-            YANGProviderRuntime.readLeafList<obj> newPath indices obj
+            let newIndices = List.rev indices
+            YANGProviderRuntime.readLeafList<obj> newPath newIndices obj
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -301,7 +353,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
             // Adds the current path to the attribute segments and gets/sets the value
             let (obj, path, indices) = %%(args.[0]) : ErasedType
             let newPath = List.rev (Access currentPath :: path)
-            YANGProviderRuntime.writeLeafList<obj> newPath indices None obj
+            let newIndices = List.rev indices
+            YANGProviderRuntime.writeLeafList<obj> newPath newIndices None obj
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -310,9 +363,9 @@ type YANGProvider(config: TypeProviderConfig) as this =
                (fun m (arg1 :: arg2 :: _ :: arg4 :: []) -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]),
                                                             [ arg1; arg2; args.[1]; arg4 ]))
             
-    // Common getter for container nodes
-    and containerPropertyGetter (t: Type) currentPath (args: Quotations.Expr list) =
-        
+    // Common getter for containers and lists that erases to an object construction.
+    and constructorGetter (t: Type) currentPath (args: Quotations.Expr list) = 
+
         // Constructor for the container type
         let ctor =
             t.GetMembers(BindingFlags.Instance ||| BindingFlags.Public)
@@ -324,28 +377,46 @@ type YANGProvider(config: TypeProviderConfig) as this =
             )
             :?> ConstructorInfo
         
-        <@@
-            // Constructs a new instance of the erased type passing the same object,
-            // but adding a segment to the access path.
-            let (obj, path, indices) = %%(args.[0]) : ErasedType
-            let newPath = Access currentPath :: path
-            ignore (obj, newPath, indices)
-        @@>
+        // Constructs a new instance of the erased type passing the same object,
+        // but adding a segment to the access path. In case no path has been provided, it is considered an indexer getter.
+        match currentPath with
+        | Some currentPath ->
+            <@@
+                let (obj, path, indices) = %%(args.[0]) : ErasedType
+                let newPath = Access currentPath :: path
+                ignore (obj, newPath, indices)
+            @@>
+        | None ->
+            <@@
+                let (obj, path, indices) = %%(args.[0]) : ErasedType
+                let newPath = Indexer :: path
+                let newIndices = ((%%args.[1]) : int) :: indices
+                ignore (obj, newPath, newIndices)
+            @@>
 
         // Replace the call to `ignore` with the actual constructor call.
         |> patchMethodCallWithOther
                <@@ ignore @@>
                (fun _ _ args -> Expr.NewObject(ctor, args))
 
+    // Common getter for container nodes
+    and containerPropertyGetter t currentPath =
+        constructorGetter t (Some currentPath)
+
     // Common getter for list nodes
-    and listPropertyGetter (t: ProvidedTypeDefinition) (args: Quotations.Expr list) =
-        <@@ raise (NotImplementedException "List getters not implemented yet.") @@>
+    and listPropertyGetter t currentPath =
+        constructorGetter t (Some currentPath)
+
+    // Common getter for the indexer of a collection
+    and listIndexerGetter t =
+        constructorGetter t None
 
 
     // Adds new members to the given parent type from the given data node.
     // Adds new nested types for containers, lists and leaf-lists. For the leafs,
     // corresponding instance properties are also added.
     and generateTypesForNode (ctx: YANGProviderGenerationContext) (node: YANGDataNode) =
+        let currentPath = (ctx.CurrentPath.Append(node.Name.Name).ToString())
         match node with
 
         | :? YANGLeaf as leaf ->
@@ -358,8 +429,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName leaf.Name.Name,
                     makeOptionType leafType,
-                    GetterCode = leafPropertyGetter leafType (ctx.CurrentPath.Append(leaf.Name.Name).ToString()),
-                    SetterCode = leafPropertySetter leafType (ctx.CurrentPath.Append(leaf.Name.Name).ToString())
+                    GetterCode = leafPropertyGetter leafType currentPath,
+                    SetterCode = leafPropertySetter leafType currentPath
                 )
             if not (isNull leaf.Description) then
                 prop.AddXmlDoc(leaf.Description)
@@ -375,7 +446,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName container.Name.Name,
                     containerType,
-                    GetterCode = containerPropertyGetter containerType (ctx.CurrentPath.Append(container.Name.Name).ToString())
+                    GetterCode = containerPropertyGetter containerType currentPath
                 )
             if not (isNull container.Description) then
                 prop.AddXmlDoc(container.Description)
@@ -391,8 +462,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName leafList.Name.Name,
                     makeOptionType (makeListType leafType),
-                    GetterCode = leafListPropertyGetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString()),
-                    SetterCode = leafListPropertySetter leafType (ctx.CurrentPath.Append(leafList.Name.Name).ToString())
+                    GetterCode = leafListPropertyGetter leafType currentPath,
+                    SetterCode = leafListPropertySetter leafType currentPath
                 )
             if not (isNull leafList.Description) then
                 prop.AddXmlDoc(leafList.Description)
@@ -407,8 +478,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
             let prop =
                 ProvidedProperty(
                     normalizeName list.Name.Name,
-                    makeListType containerType,
-                    GetterCode = listPropertyGetter containerType
+                    containerType,
+                    GetterCode = listPropertyGetter containerType currentPath
                 )
             if not (isNull list.Description) then
                 prop.AddXmlDoc(list.Description)
@@ -429,7 +500,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         ctx.Push(m, rootType, CPSPath(rootPath))
 
         // Generates common members for the root type
-        generateCommonMembers ctx false rootType |> ignore
+        generateCommonMembers ctx false |> ignore
 
         // Generates the subtypes from the other data nodes
         m.DataNodes |> Seq.iter (generateTypesForNode ctx)

@@ -19,6 +19,7 @@
   - Add a check to limit the properties that can be added to a type:
     e.g., an enum cannot have the UnionMembers property.
   - Circular imports.
+  - Add active patterns to recognize the base types.
 
 - Check for leaks of native memory.
   The `>>=` and `|>>` operators used in the code usually free memory only in case of success.
@@ -43,3 +44,16 @@
 	  
 - Add an API to explore paths and IDs, similar to the Python `cps.info`.
   This might lead to the implementation of a type provider to have paths checked at compile time.
+
+- YANGProvider:
+  - Store the paths created in a generated type and reference them by id, to avoid object construction every time.
+  - Autogenerate validation code based on the YANG model.
+  - Support more complex YANG types, like enums or unions.
+  - Find a way to make it less dependent on the native library. Find how the native attribute ids are generated
+    from the paths and reimplement it in managed code. This should allow testing the provider without the native lib
+	and using models not already registered to the CPS.
+  - Implement enum types and union types.
+
+- Update the examples to reflect the new API.
+
+- Create a Nuget packet.
