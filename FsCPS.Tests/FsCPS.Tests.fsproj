@@ -70,6 +70,7 @@
     <Compile Include="Yang\StatementParsers.fs" />
     <Compile Include="Yang\Types.fs" />
     <Compile Include="Yang\Imports.fs" />
+    <Compile Include="TypeProviders\YANGProviderRuntime.fs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">

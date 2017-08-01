@@ -15,7 +15,7 @@ open FsCPS.TypeProviders
 [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
 [<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
 type AttributePathSegment =
-| Access of string
+| Access of CPSAttributeID
 | Indexer
 
 
@@ -58,6 +58,9 @@ module YANGProviderRuntime =
     
 
     let private readPath segments indices (obj: CPSObject) =
+
+        if segments = [] then
+            invalidArg "segments" "Invalid empty read path."
         
         let rec f segments indices attr =
             match segments, indices with
@@ -72,11 +75,7 @@ module YANGProviderRuntime =
 
             // Access to a fixed attribute ID.
             // This is used to access properties inside containers.
-            | Access attrPath :: remainingSegs, _ ->
-                let attrId = attrPath
-                             |> NativeMethods.AttrIdFromPath
-                             |> Result.okOrThrow failwith
-                             |> CPSAttributeID
+            | Access attrId :: remainingSegs, _ ->
                 match attr with
                 | Container (_, map) ->
                     map
@@ -136,7 +135,7 @@ module YANGProviderRuntime =
                         x :: state
                 ) []
             else
-                lst @ List.init (lst.Length - i + 1) (fun j ->
+                lst @ List.init (i - lst.Length + 1) (fun j ->
                     if i = j then
                         f Map.empty<_, _>
                     else
@@ -147,30 +146,18 @@ module YANGProviderRuntime =
             match segments, indices with
 
             // Base case
-            | Access attrPath :: [], [] ->
-                let attrId = attrPath
-                             |> NativeMethods.AttrIdFromPath
-                             |> Result.okOrThrow failwith
-                             |> CPSAttributeID
+            | Access attrId :: [], [] ->
                 match value with
                 | Some v -> Map.add attrId (makeAttribute attrId v) map
                 | None -> Map.remove attrId map
 
             // Access a list
-            | Access listPath :: Indexer :: remainingSegments, i :: remainingIndices when remainingSegments <> [] ->
-                let listId = listPath
-                             |> NativeMethods.AttrIdFromPath
-                             |> Result.okOrThrow failwith
-                             |> CPSAttributeID
+            | Access listId :: Indexer :: remainingSegments, i :: remainingIndices when remainingSegments <> [] ->
                 let innerList = findOrCreateList listId i (f remainingSegments remainingIndices) map
                 Map.add listId (List (listId, innerList)) map
 
             // Access a container
-            | Access attrPath :: remainingSegments, _ when remainingSegments <> [] ->
-                let attrId = attrPath
-                             |> NativeMethods.AttrIdFromPath
-                             |> Result.okOrThrow failwith
-                             |> CPSAttributeID
+            | Access attrId :: remainingSegments, _ when remainingSegments <> [] ->
                 let innerMap = findOrCreateMap attrId map
                                |> f remainingSegments indices
                 Map.add attrId (Container (attrId, innerMap)) map

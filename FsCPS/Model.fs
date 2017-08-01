@@ -97,8 +97,6 @@ type CPSKey private (key, qual, path) =
 /// Object of the CPS system.
 type CPSObject(key: CPSKey) =
 
-    let mutable attributes = Map.empty<CPSAttributeID, CPSAttribute>
-
     /// Constructs a new object with a key with the given path.
     /// The default qualifier is `CPSQualifier.Target`.
     new (rootPath) =
@@ -112,9 +110,7 @@ type CPSObject(key: CPSKey) =
     member val Key = key
 
     /// Returns all the attributes stored in this object.
-    member __.Attributes
-        with get() = attributes
-        and internal set(v) = attributes <- v
+    member val Attributes = Map.empty<CPSAttributeID, CPSAttribute> with get, set
 
     /// Sets the value of a Leaf attribute using a path relative to the object's key.
     member this.SetAttribute(path: string, v: byte[]) =
@@ -190,7 +186,7 @@ type CPSObject(key: CPSKey) =
 
     /// Sets the value of an attribute.
     member this.SetAttribute(value: CPSAttribute) =
-        attributes <- Map.add value.AttributeID value attributes
+        this.Attributes <- Map.add value.AttributeID value this.Attributes
 
     /// Extracts an attribute from this object using a path relative to the object's key.
     member this.GetAttribute(name: string) =
@@ -211,7 +207,7 @@ type CPSObject(key: CPSKey) =
 
     /// Extracts an attribute using its attribute ID.
     member this.GetAttribute(id: CPSAttributeID) =
-        attributes |> Map.tryFind id
+        Map.tryFind id this.Attributes
 
     /// Removes an attribute from this object using a path relative to the object's key.
     member this.RemoveAttribute(name: string) =
@@ -232,7 +228,7 @@ type CPSObject(key: CPSKey) =
 
     /// Removes an attribute using its attribute ID.
     member this.RemoveAttribute(id: CPSAttributeID) =
-        attributes <- attributes |> Map.remove id
+        this.Attributes <- Map.remove id this.Attributes
         
     /// Returns a string representation of this object,
     /// complete of key and attributes.
@@ -240,7 +236,7 @@ type CPSObject(key: CPSKey) =
         let sb = StringBuilder()
         sb.Append("Key: ").Append(this.Key.Key).Append('\n')
           .Append("Path alias: ").Append(this.Key.Path).Append('\n') |> ignore
-        attributes |> Map.toSeq |> Seq.iteri (fun i (_, attr) ->
+        this.Attributes |> Map.toSeq |> Seq.iteri (fun i (_, attr) ->
             sb.Append(if i > 0 then "\n" else "")
               .Append(attr.ToString(truncateArray, 0) : string) |> ignore
         )
@@ -258,7 +254,7 @@ type CPSObject(key: CPSKey) =
 
         // Adds all the attributes
         >>= (fun nativeObject ->
-            attributes
+            this.Attributes
             |> Map.toSeq
             |> foldResult (fun _ (_, attr) ->
                 attr.AddToNativeObject(nativeObject, idStack)
