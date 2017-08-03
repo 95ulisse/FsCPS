@@ -1,6 +1,5 @@
 ﻿namespace ProviderImplementation
 
-#nowarn "00025"
 #nowarn "10001"
 
 open System
@@ -21,13 +20,11 @@ open FsCPS
 open FsCPS.Yang
 open FsCPS.TypeProviders
 open FsCPS.TypeProviders.Runtime
+open FsCPS.TypeProviders.Runtime.YANGProviderRuntime
 
 #if DEBUG
 open ProviderImplementation.ProvidedTypesTesting
 #endif
-
-
-type private ErasedType = (CPSObject * AttributePathSegment list * int list)
 
 
 type internal YANGProviderGenerationContext() =
@@ -163,7 +160,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
     let rec generateContainerType (ctx: YANGProviderGenerationContext) (container: YANGDataNodeContainer) =
         
         // Crate a new type with the same name of the container.
-        let newType = ProvidedTypeDefinition(normalizeName container.Name.Name, Some typeof<ErasedType>, HideObjectMethods = true)
+        let newType = ProvidedTypeDefinition(normalizeName container.Name.Name, Some typeof<PathBuilder>, HideObjectMethods = true)
         
         // Recursively generate the types.
         ctx.Push(container, newType, ctx.CurrentPath.Append(container.Name.Name))
@@ -182,13 +179,13 @@ type YANGProvider(config: TypeProviderConfig) as this =
         | :? YANGList ->
 
             // Create a new collection type
-            let collectionType = ProvidedTypeDefinition(newType.Name, Some typeof<ErasedType>, HideObjectMethods = true)
+            let collectionType = ProvidedTypeDefinition(newType.Name, Some typeof<PathBuilder>, HideObjectMethods = true)
 
             // Constructor
             collectionType.AddMember(
                 ProvidedConstructor(
-                    [ ProvidedParameter("obj", typeof<ErasedType>) ],
-                    InvokeCode = (fun args -> <@@ %%(args.[0]) : ErasedType @@>)
+                    [ ProvidedParameter("obj", typeof<PathBuilder>) ],
+                    InvokeCode = (fun args -> <@@ %%(args.[0]) : PathBuilder @@>)
                 )
             )
 
@@ -207,14 +204,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     "Count",
                     typeof<int>,
-                    GetterCode = (fun args ->
-                        <@@
-                            let (obj, path, indices) = %%(args.[0]) : ErasedType
-                            let newPath = List.rev path
-                            let newIndices = List.rev indices
-                            YANGProviderRuntime.getListLength newPath newIndices obj
-                        @@>
-                    )
+                    GetterCode = (fun args -> <@@ (%%(args.[0]) : PathBuilder).GetListLength() @@>)
                 )
             )
 
@@ -235,13 +225,13 @@ type YANGProvider(config: TypeProviderConfig) as this =
     and generateCommonMembers (ctx: YANGProviderGenerationContext) generateFactoryMethods =
         let ctor1 =
             ProvidedConstructor(
-                [ ProvidedParameter("obj", typeof<ErasedType>) ],
-                InvokeCode = (fun args -> <@@ %%(args.[0]) : ErasedType @@>)
+                [ ProvidedParameter("obj", typeof<PathBuilder>) ],
+                InvokeCode = (fun args -> <@@ %%(args.[0]) : PathBuilder @@>)
             )
         let ctor2 =
             ProvidedConstructor(
                 [ ProvidedParameter("path", typeof<CPSPath>) ],
-                InvokeCode = (fun args -> <@@ (CPSObject(%%(args.[0]) : CPSPath), List.empty<AttributePathSegment>, List.empty<int>) @@>)
+                InvokeCode = (fun args -> <@@ PathBuilder.FromObject(CPSObject(%%(args.[0]) : CPSPath)) @@>)
             )
         
         let objProp =
@@ -249,7 +239,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 "ToCPSObject",
                 [],
                 typeof<CPSObject>,
-                InvokeCode = (fun args -> <@@ let (o, _, _) = %%(args.[0]) : ErasedType in o @@>)
+                InvokeCode = (fun args -> <@@ (%%(args.[0]) : PathBuilder).CPSObject @@>)
             )
 
         let t = ctx.CurrentType
@@ -306,63 +296,49 @@ type YANGProvider(config: TypeProviderConfig) as this =
     and leafPropertyGetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            let (obj, path, indices) = %%(args.[0]) : ErasedType
-            let newPath = List.rev (Access (CPSAttributeID attrId) :: path)
-            let newIndices = List.rev indices
-            YANGProviderRuntime.readLeaf<obj> newPath newIndices obj
+            (%%(args.[0]) : PathBuilder).Access(attrId).ReadLeaf<obj>()
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
         |> patchMethodCall
-               <@@ YANGProviderRuntime.readLeaf [] [] Unchecked.defaultof<_> @@>
+               <@@ PathBuilder.Invalid.ReadLeaf() @@>
                (fun m args -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), args))
 
     // Common setter for leaf data nodes.
     and leafPropertySetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            let (obj, path, indices) = %%(args.[0]) : ErasedType
-            let newPath = List.rev (Access (CPSAttributeID attrId) :: path)
-            let newIndices = List.rev indices
-            YANGProviderRuntime.writeLeaf<obj> newPath newIndices None obj
+            (%%(args.[0]) : PathBuilder).Access(attrId).WriteLeaf(None)
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
         |> patchMethodCall
-               <@@ YANGProviderRuntime.writeLeaf [] [] None Unchecked.defaultof<_> @@>
-               (fun m (arg1 :: arg2 :: _ :: arg4 :: []) -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]),
-                                                            [ arg1; arg2; args.[1]; arg4 ]))
+               <@@ PathBuilder.Invalid.WriteLeaf(None) @@>
+               (fun m _ -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), [ args.[1] ]))
 
     // Common getter for leaf-list nodes
     and leafListPropertyGetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            let (obj, path, indices) = %%(args.[0]) : ErasedType
-            let newPath = List.rev (Access (CPSAttributeID attrId) :: path)
-            let newIndices = List.rev indices
-            YANGProviderRuntime.readLeafList<obj> newPath newIndices obj
+            (%%(args.[0]) : PathBuilder).Access(attrId).ReadLeafList<obj>()
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
         |> patchMethodCall
-               <@@ YANGProviderRuntime.readLeafList [] [] Unchecked.defaultof<_> @@>
+               <@@ PathBuilder.Invalid.ReadLeafList() @@>
                (fun m args -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), args))
 
     // Common setter for leaf-list nodes
     and leafListPropertySetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            let (obj, path, indices) = %%(args.[0]) : ErasedType
-            let newPath = List.rev (Access (CPSAttributeID attrId) :: path)
-            let newIndices = List.rev indices
-            YANGProviderRuntime.writeLeafList<obj> newPath newIndices None obj
+            (%%(args.[0]) : PathBuilder).Access(attrId).WriteLeafList(None)
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
         |> patchMethodCall
-               <@@ YANGProviderRuntime.writeLeafList [] [] None Unchecked.defaultof<_> @@>
-               (fun m (arg1 :: arg2 :: _ :: arg4 :: []) -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]),
-                                                            [ arg1; arg2; args.[1]; arg4 ]))
+               <@@ PathBuilder.Invalid.WriteLeafList(None) @@>
+               (fun m _ -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), [ args.[1] ]))
             
     // Common getter for containers and lists that erases to an object construction.
     and constructorGetter (t: Type) currentAttrId (args: Quotations.Expr list) = 
@@ -373,7 +349,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
             |> Array.find (fun m ->
                 m.MemberType = MemberTypes.Constructor && (
                     let pars = (m :?> ConstructorInfo).GetParameters()
-                    pars.Length = 1 && pars.[0].ParameterType = typeof<ErasedType>
+                    pars.Length = 1 && pars.[0].ParameterType = typeof<PathBuilder>
                 )
             )
             :?> ConstructorInfo
@@ -383,16 +359,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
         match currentAttrId with
         | Some (CPSAttributeID attrId) ->
             <@@
-                let (obj, path, indices) = %%(args.[0]) : ErasedType
-                let newPath = Access (CPSAttributeID attrId) :: path
-                ignore (obj, newPath, indices)
+                ignore ((%%(args.[0]) : PathBuilder).Access(attrId))
             @@>
         | None ->
             <@@
-                let (obj, path, indices) = %%(args.[0]) : ErasedType
-                let newPath = Indexer :: path
-                let newIndices = ((%%args.[1]) : int) :: indices
-                ignore (obj, newPath, newIndices)
+                ignore ((%%(args.[0]) : PathBuilder).Indexer((%%args.[1]) : int))
             @@>
 
         // Replace the call to `ignore` with the actual constructor call.
@@ -495,7 +466,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Generates the root type
         let rootType =
-            ProvidedTypeDefinition(asm, ns, typeName, Some typeof<ErasedType>, HideObjectMethods = true)
+            ProvidedTypeDefinition(asm, ns, typeName, Some typeof<PathBuilder>, HideObjectMethods = true)
 
         // Creates a new generation context
         let ctx = YANGProviderGenerationContext()

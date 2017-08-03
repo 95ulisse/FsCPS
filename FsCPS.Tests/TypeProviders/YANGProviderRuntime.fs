@@ -8,6 +8,7 @@ open FsCheck
 open FsCheck.Xunit
 open FsCPS
 open FsCPS.TypeProviders.Runtime
+open FsCPS.TypeProviders.Runtime.YANGProviderRuntime
 
 
 type Arbitraries() =

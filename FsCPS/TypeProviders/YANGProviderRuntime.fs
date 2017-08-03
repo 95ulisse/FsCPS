@@ -12,18 +12,16 @@ open FsCPS.Native
 open FsCPS.TypeProviders
 
 
-[<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
-[<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-type AttributePathSegment =
-| Access of CPSAttributeID
-| Indexer
-
-
 /// Internals of the runtime for the YANGProvider.
 [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
 [<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-[<RequireQualifiedAccess>]
 module YANGProviderRuntime =
+
+    [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
+    [<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+    type internal AttributePathSegment =
+    | Access of CPSAttributeID
+    | Indexer
 
     let private transformers = Dictionary<Type, (byte[] -> obj) * (obj -> byte[])>()
 
@@ -179,7 +177,7 @@ module YANGProviderRuntime =
             
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let readLeaf<'a> path indices obj =
+    let internal readLeaf<'a> path indices obj =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (reader, _)) ->
             readPath path indices obj
@@ -192,7 +190,7 @@ module YANGProviderRuntime =
             
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let writeLeaf<'a> path indices (attrVal: 'a option) obj =
+    let internal writeLeaf<'a> path indices (attrVal: 'a option) obj =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (_, writer)) ->
             attrVal
@@ -204,7 +202,7 @@ module YANGProviderRuntime =
 
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let readLeafList<'a> path indices obj =
+    let internal readLeafList<'a> path indices obj =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (reader, _)) ->
             readPath path indices obj
@@ -217,7 +215,7 @@ module YANGProviderRuntime =
             
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let writeLeafList<'a> path indices (attrVal: 'a list option) obj =
+    let internal writeLeafList<'a> path indices (attrVal: 'a list option) obj =
         match transformers.TryGetValue(typeof<'a>) with
         | (true, (_, writer)) ->
             attrVal
@@ -229,11 +227,52 @@ module YANGProviderRuntime =
 
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This method is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let getListLength path indices obj =
+    let internal getListLength path indices obj =
         match readPath path indices obj with
         | Some (List (_, lst)) -> List.length lst
         | Some _ -> invalidArg "path" "The given path does not point to a list."
         | None -> 0
+
+
+    [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
+    [<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
+    type PathBuilder =
+        private {
+            Object: CPSObject;
+            Segments: AttributePathSegment list;
+            Indices: int list
+        }
+        with
+
+            static member internal Invalid = { Object = Unchecked.defaultof<_>; Segments = []; Indices = [] }
+
+            static member FromObject obj =
+                { Object = obj; Segments = []; Indices = [] }
+
+            member this.CPSObject
+                with get() = this.Object
+
+            member this.Access aid =
+                { this with Segments = Access (CPSAttributeID aid) :: this.Segments }
+
+            member this.Indexer i =
+                { this with Segments = Indexer :: this.Segments;
+                            Indices = i :: this.Indices }
+
+            member this.ReadLeaf<'T> () =
+                readLeaf<'T> (List.rev this.Segments) (List.rev this.Indices) this.Object
+
+            member this.WriteLeaf<'T> v =
+                writeLeaf<'T> (List.rev this.Segments) (List.rev this.Indices) v this.Object
+
+            member this.ReadLeafList<'T> () =
+                readLeafList<'T> (List.rev this.Segments) (List.rev this.Indices) this.Object
+
+            member this.WriteLeafList<'T> v =
+                writeLeafList<'T> (List.rev this.Segments) (List.rev this.Indices) v this.Object
+
+            member this.GetListLength () =
+                getListLength (List.rev this.Segments) (List.rev this.Indices) this.Object
 
 
     // ----------------------------------------------------------------------------------------
@@ -244,6 +283,6 @@ module YANGProviderRuntime =
     [<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
     let validateObject (obj: CPSObject) (key: string) =
         if obj.Key.Key = key then
-            Ok (obj, List.empty<AttributePathSegment>, List.empty<int>)
+            Ok (PathBuilder.FromObject obj)
         else
             Error MismatchingKey
