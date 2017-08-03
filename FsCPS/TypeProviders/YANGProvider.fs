@@ -246,6 +246,55 @@ type YANGProvider(config: TypeProviderConfig) as this =
         t.AddMembers([ ctor1; ctor2; ])
         t.AddMember(objProp)
 
+        // Add shortcut methods to quickly execute transactions.
+        let get =
+            ProvidedMethod(
+                "Get",
+                [],
+                typeof<Result<CPSObject list, string>>,
+                InvokeCode = (fun args -> <@@ CPSTransaction.Get([ (%%(args.[0]) : PathBuilder).CPSObject ]) @@>)
+            )
+        let set =
+            ProvidedMethod(
+                "Set",
+                [],
+                typeof<Result<unit, string>>,
+                InvokeCode = (fun args ->
+                    <@@
+                        let t = CPSTransaction()
+                        t.Set((%%(args.[0]) : PathBuilder).CPSObject)
+                        t.Commit()
+                    @@>
+                )
+            )
+        let create =
+            ProvidedMethod(
+                "Create",
+                [],
+                typeof<Result<unit, string>>,
+                InvokeCode = (fun args ->
+                    <@@
+                        let t = CPSTransaction()
+                        t.Create((%%(args.[0]) : PathBuilder).CPSObject)
+                        t.Commit()
+                    @@>
+                )
+            )
+        let delete =
+            ProvidedMethod(
+                "Delete",
+                [],
+                typeof<Result<unit, string>>,
+                InvokeCode = (fun args ->
+                    <@@
+                        let t = CPSTransaction()
+                        t.Delete((%%(args.[0]) : PathBuilder).CPSObject)
+                        t.Commit()
+                    @@>
+                )
+            )
+        t.AddMembers([ get; set; create; delete ])
+
         // Adds the corresponding factory methods to the root type
         if generateFactoryMethods then
             
