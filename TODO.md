@@ -1,5 +1,8 @@
 # Todo and improvements
 
+> These are just my personal random notes, they will soon disappear from the repository.
+> Many of these things do not even make sense, I just write down everything that pops off my head.
+
 - Replace type Result with a type that differentiates between a common error and a fatal one.
   Something like:
 
@@ -20,18 +23,12 @@
     e.g., an enum cannot have the UnionMembers property.
   - Circular imports.
   - Add active patterns to recognize the base types.
+  - Check that data node names are unique in their scope.
 
 - Check for leaks of native memory.
   The `>>=` and `|>>` operators used in the code usually free memory only in case of success.
   Maybe wrap the native pointers in an `IDisposable` that will automatically release the memory.
   To use that, maybe an helper like `Result.using` or an operator `>>?`.
-
-- Embedded attributes.
-  At the moment, the library supports just one "level" (?) of attributes.
-  I could not find any documentation about this.
-  Also fix functions like `AttrIdFromPath` that have magic offsets inside.
-  The same goes for the lists. As an example, check `base-ip/ipv4` when an interface has more
-  than one address.
 
 - Native interop:
   - Find a way to wake up a thread suspended on a cps_api_wait_for_event call. (`CPSEventObservable`)
@@ -52,7 +49,6 @@
   - Find a way to make it less dependent on the native library. Find how the native attribute ids are generated
     from the paths and reimplement it in managed code. This should allow testing the provider without the native lib
 	and using models not already registered to the CPS.
-  - Implement enum types and union types.
 
 - Update the examples to reflect the new API.
 

@@ -209,6 +209,54 @@ type CPSObject(key: CPSKey) =
     member this.GetAttribute(id: CPSAttributeID) =
         Map.tryFind id this.Attributes
 
+    /// Extracts a leaf from this object using a path relative to the object's key.
+    /// Throws if the attribute is not a leaf.
+    member this.GetLeaf(name: string) =
+        this.GetAttribute(name)
+        |> Option.map (function
+                       | Leaf (_, v) -> v
+                       | _ -> invalidArg "name" "Expected leaf.")
+
+    /// Extracts a leaf using its absolute path.
+    /// Throws if the attribute is not a leaf.
+    member this.GetLeaf(path: CPSPath) =
+        this.GetAttribute(path)
+        |> Option.map (function
+                       | Leaf (_, v) -> v
+                       | _ -> invalidArg "name" "Expected leaf.")
+    
+    /// Extracts a leaf using its attribute ID.
+    /// Throws if the attribute is not a leaf.
+    member this.GetLeaf(id: CPSAttributeID) =
+        this.GetAttribute(id)
+        |> Option.map (function
+                       | Leaf (_, v) -> v
+                       | _ -> invalidArg "name" "Expected leaf.")
+
+    /// Extracts a leaf-list from this object using a path relative to the object's key.
+    /// Throws if the attribute is not a leaf-list.
+    member this.GetLeafList(name: string) =
+        this.GetAttribute(name)
+        |> Option.map (function
+                       | LeafList (_, v) -> v
+                       | _ -> invalidArg "name" "Expected leaf-list.")
+
+    /// Extracts a leaf-list using its absolute path.
+    /// Throws if the attribute is not a leaf-list.
+    member this.GetLeafList(path: CPSPath) =
+        this.GetAttribute(path)
+        |> Option.map (function
+                       | LeafList (_, v) -> v
+                       | _ -> invalidArg "name" "Expected leaf-list.")
+    
+    /// Extracts a leaf-list using its attribute ID.
+    /// Throws if the attribute is not a leaf-list.
+    member this.GetLeafList(id: CPSAttributeID) =
+        this.GetAttribute(id)
+        |> Option.map (function
+                       | LeafList (_, v) -> v
+                       | _ -> invalidArg "name" "Expected leaf-list.")
+
     /// Removes an attribute from this object using a path relative to the object's key.
     member this.RemoveAttribute(name: string) =
         match this.Key.Path with
