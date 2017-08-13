@@ -164,7 +164,7 @@ YANG types are mapped to .NET types according to the following table:
 
 | YANG type     |    | .NET Type           | Notes                |
 |---------------|----|---------------------|----------------------|
-| `empty`       | -> | \<not implemented\> | Not yet implemented. |
+| `empty`       | -> | `unit`              |                      |
 | `boolean`     | -> | `bool`              |                      |
 | `int8`        | -> | `int8`              |                      |
 | `int16`       | -> | `int16`             |                      |

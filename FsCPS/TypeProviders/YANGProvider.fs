@@ -138,7 +138,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
     // of enums and unions) generates a new type.
     let generateLeafType (ctx: YANGProviderGenerationContext) (yangType: YANGType) =
         match yangType.PrimitiveType with
-        | x when x = YANGPrimitiveTypes.Empty       -> failwith "Invalid type Empty."
+        | x when x = YANGPrimitiveTypes.Empty       -> typeof<unit>
         | x when x = YANGPrimitiveTypes.Boolean     -> typeof<bool>
         | x when x = YANGPrimitiveTypes.Int8        -> typeof<int8>
         | x when x = YANGPrimitiveTypes.Int16       -> typeof<int16>

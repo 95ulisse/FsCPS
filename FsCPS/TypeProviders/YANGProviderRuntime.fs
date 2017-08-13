@@ -32,6 +32,7 @@ module YANGProviderRuntime =
         let inline add (reader: byte[] * int -> ^a) (writer: ^a -> byte[]) =
             transformers.Add(typeof< ^a >, (wrapr reader, wrapw writer))
 
+        add<unit> (fun _ -> ()) (fun _ -> Array.empty<_>)
         add<bool> BitConverter.ToBoolean BitConverter.GetBytes
         add<int8> (fun (arr, _) -> int8 arr.[0]) (fun x -> [| byte x |])
         add<int16> BitConverter.ToInt16 BitConverter.GetBytes

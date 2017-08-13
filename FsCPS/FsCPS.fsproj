@@ -78,6 +78,7 @@
     <None Include="Examples\dell-base-vlan.yang" />
     <None Include="Examples\dell-base-ip.yang" />
     <None Include="Examples\vlan.fsx" />
+    <None Include="Examples\example-model.yang" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="FParsec">

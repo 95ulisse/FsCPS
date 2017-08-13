@@ -22,6 +22,11 @@ module example {
     // A factory method will also be added to the root type.
     container root-container {
         
+		// Empty typed leaf
+		leaf empty-leaf {
+			type empty;
+		}
+
         // The leaf inside the container should generate a property
         // inside the type of the container.
         leaf container-leaf {
