@@ -54,7 +54,7 @@ type internal YANGProviderGenerationContext() =
     member __.RootType
         with get() = typeStack |> Seq.last
 
-    member __.TypesSequence
+    member __.TypeStack
         with get() = typeStack :> seq<_>
         
     member __.IsEmpty
@@ -300,17 +300,11 @@ type YANGProvider(config: TypeProviderConfig) as this =
             
             // We must be sure that the name we choose for the method is unique.
             let methodName =
-                seq {
-                    let mutable name = String.Empty
-                    for t in ctx.TypesSequence do
-                        name <- t.Name + name
-                        yield name
-                }
-                |> Seq.find (fun name ->
-                    ctx.RootType.GetMethods()
-                    |> Array.exists (fun m -> m.Name = name)
-                    |> not
-                )
+                ctx.TypeStack
+                |> Seq.toList
+                |> List.rev
+                |> List.tail // Remove the root type from the name
+                |> List.fold (fun name t -> name + t.Name) String.Empty
 
             let pathExpr = Expr.Value(ctx.CurrentPath.ToString(), typeof<string>)
             let keyExpr = Expr.Value(CPSKey(CPSQualifier.Target, ctx.CurrentPath).Key, typeof<string>)
