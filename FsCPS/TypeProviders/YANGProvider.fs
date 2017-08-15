@@ -151,8 +151,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
         | x when x = YANGPrimitiveTypes.String      -> typeof<string>
         | x when x = YANGPrimitiveTypes.Binary      -> typeof<byte[]>
         | x when x = YANGPrimitiveTypes.Decimal64   -> typeof<double>
-        | x when x = YANGPrimitiveTypes.Enumeration -> failwith "Enumerations not implemented."
-        | x when x = YANGPrimitiveTypes.Union       -> failwith "Unions not implemented."
+        | x when x = YANGPrimitiveTypes.Enumeration -> typeof<byte[]> // TODO: Enumerations not implemented.
+        | x when x = YANGPrimitiveTypes.Union       -> typeof<byte[]> // TODO: Unions not implemented.
         | _ ->
             failwithf "Unexpected primitive type %A." yangType.PrimitiveType.Name
         
