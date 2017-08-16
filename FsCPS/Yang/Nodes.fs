@@ -158,6 +158,7 @@ and internal Scope =
         ParentNode: YANGNode;
         Prefixes: Dictionary<string, YANGModule>;
         Types: Dictionary<YANGName, YANGType>;
+        Groupings: Dictionary<YANGName, YANGGrouping>;
         Parent: Scope option;
     }
     with
@@ -167,6 +168,15 @@ and internal Scope =
             let rec f scope =
                 match scope.Types.TryGetValue(name), scope.Parent with
                 | (true, t), _ -> Some(t)
+                | _, Some parent -> f parent
+                | _, None -> None
+            f this
+
+        /// Returns the grouping with the given name.
+        member this.GetGrouping(name: YANGName) =
+            let rec f scope =
+                match scope.Groupings.TryGetValue(name), scope.Parent with
+                | (true, g), _ -> Some(g)
                 | _, Some parent -> f parent
                 | _, None -> None
             f this
@@ -193,6 +203,16 @@ and internal Scope =
                     this.Types.Add(t.Name, t)
                     Ok()
 
+        /// Registers a new grouping in the current scope.
+        /// Returns an error if the new grouping would shadow an already defined one.
+        member this.RegisterGrouping(g: YANGGrouping) =
+            match this.GetGrouping(g.Name) with
+            | Some shadowedGrouping ->
+                Error([ ShadowedGrouping(g.OriginalStatement.Value, shadowedGrouping) ])
+            | None ->
+                this.Groupings.Add(g.Name, g)
+                Ok()
+
         /// Resolves a reference to a type.
         member this.ResolveTypeRef(prefix: string option, name: string) =
             match prefix, YANGPrimitiveTypes.FromName(name) with
@@ -216,6 +236,28 @@ and internal Scope =
                     let fullName = { Namespace = m.Namespace; Name = name }
                     match (m.ExportedTypes :> Dictionary<_,_>).TryGetValue(fullName) with
                     | (true, t) -> Some(t)
+                    | _ -> None
+                | None -> None
+
+        /// Resolves a reference to a grouping.
+        member this.ResolveGroupingRef(prefix: string option, name: string) =
+            match prefix with
+        
+            // We can either have an unprefixed reference, or a prefixed reference that is using
+            // the same prefix of the module we are parsing. In both cases, resolve from the current scope.
+            | None ->
+                this.GetGrouping({ Namespace = this.Module.Namespace; Name = name })
+            | Some p when p = this.Module.Prefix ->
+                this.GetGrouping({ Namespace = this.Module.Namespace; Name = name })
+
+            // We have a prefixed reference, so resolve the module associated to the prefix,
+            // then search between it's exported types
+            | Some p ->
+                match this.GetIncludedModule(p) with
+                | Some m ->
+                    let fullName = { Namespace = m.Namespace; Name = name }
+                    match (m.ExportedGroupings :> Dictionary<_,_>).TryGetValue(fullName) with
+                    | (true, g) -> Some(g)
                     | _ -> None
                 | None -> None
 
@@ -258,6 +300,7 @@ and internal SchemaParserContext(rootStatement: Statement, options: YANGParserOp
                     ParentNode = parentNode;
                     Prefixes = Dictionary<_, _>();
                     Types = Dictionary<_, _>();
+                    Groupings = Dictionary<_, _>();
                     Parent = if _scopeStack.Count = 0 then None else Some (_scopeStack.Peek())
                 }
             )
@@ -269,6 +312,7 @@ and internal SchemaParserContext(rootStatement: Statement, options: YANGParserOp
                         ParentNode = parentNode;
                         Prefixes = Dictionary<_, _>();
                         Types = Dictionary<_, _>();
+                        Groupings = Dictionary<_, _>();
                         Parent = Some this.Scope
                 }
             )
@@ -306,12 +350,21 @@ and [<AbstractClass>] YANGDataNode(name: YANGName) =
     member val Reference: string = null with get, set
     member val Status = YANGStatus.Current with get, set
 
+    abstract member ReplaceNamespace: YANGNamespace -> YANGDataNode
+
 
 /// Base class for a YANG node which is a data node and can contain itself other data nodes.
 and [<AbstractClass>] YANGDataNodeContainer(name) =
     inherit YANGDataNode(name)
 
     member val DataNodes = ResizeArray<YANGDataNode>()
+
+    override this.EnsureRefs() =
+        YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
+        >>= (fun _ ->
+            this.DataNodes
+            |> foldResult (fun _ node -> node.EnsureRefs()) ()
+        )
 
 
 /// Status of a YANG schema node.
@@ -373,6 +426,10 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
     | InvalidTypeRestriction of Statement * YANGType
     | DuplicateEnumName of YANGEnumValue
     | DuplicateEnumValue of YANGEnumValue
+
+    // Groupings
+    | UnresolvedGroupingRef of Statement * string
+    | ShadowedGrouping of Statement * YANGGrouping
 
     with
 
@@ -446,6 +503,13 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
                     x.OriginalStatement, (sprintf "The enum name \"%s\" has already been used." x.Name)
                 | DuplicateEnumValue(x) ->
                     x.OriginalStatement, (sprintf "The enum value \"%d\" has already been used." x.Value.Value)
+                | UnresolvedGroupingRef(x, y) ->
+                    Some x, (sprintf "Cannot find grouping %s." y)
+                | ShadowedGrouping(x, y) ->
+                    let stmt: Statement option = y.OriginalStatement
+                    match stmt with
+                    | Some(s) -> Some x, (sprintf "This grouping shadows the grouping %A defined at %A." y.Name s.Position)
+                    | None -> Some x, "This grouping shadows a grouping defined in an higher scope."
             
             match stmt with
             | Some(s) -> sprintf "Statement \"%s\" (%A): %s" s.Name s.Position msg
@@ -1188,12 +1252,93 @@ and YANGPrimitiveTypes private () =
         | "enumeration" -> Some(YANGPrimitiveTypes.Enumeration)
         | "union" -> Some(YANGPrimitiveTypes.Union)
         | _ -> None
-        
+
 
 
 
 // -------------------------------------------------------------------
-// Implementation of all the supported nodes
+// Groupings
+// -------------------------------------------------------------------
+
+and YANGGrouping(name) =
+    inherit YANGNode()
+
+    member this.Name = name
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+    member val DataNodes = ResizeArray<YANGDataNode>()
+
+    override this.EnsureRefs() =
+        YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
+        >>= (fun _ ->
+            this.DataNodes
+            |> foldResult (fun _ node -> node.EnsureRefs()) ()
+        )
+
+
+/// Reference to a YANG grouping.
+/// A reference can include additional refinements.
+and internal YANGGroupingRef(resolvedGrouping: YANGGrouping option, prefix: string option, name: string, scope: Scope) =
+    inherit YANGDataNode({ Name = "$$grouping$$"; Namespace = YANGNamespace.Invalid })
+
+    let resolved = lazy (
+        match resolvedGrouping with
+        | Some _ -> resolvedGrouping
+        | None -> scope.ResolveGroupingRef(prefix, name)
+    )
+
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+
+    override this.EnsureRefs() =
+        match resolved.Value with
+        | None -> Error [ UnresolvedGroupingRef(this.OriginalStatement.Value, name) ]
+        | Some grouping -> grouping.EnsureRefs()
+
+    override __.ReplaceNamespace _ =
+        invalidOp "Cannot replace the namespace on a fake node."
+
+    member internal __.InsertNodesIn(initialIndex, lst: IList<YANGDataNode>) =
+        let g = resolved.Value.Value
+        g.DataNodes
+        |> Seq.map (fun node -> node.ReplaceNamespace(scope.Module.Namespace))
+        |> Seq.iteri (fun i node -> lst.Insert(initialIndex + i, node))
+
+        initialIndex + g.DataNodes.Count
+
+    /// Replaces all the occurrencies of YANGGroupingRef nodes with the actual nodes in the grouping.
+    static member internal ExpandGroupingRefs (lst: IList<YANGDataNode>) =
+        let mutable i = 0
+        let mutable res = Ok ()
+        while i < lst.Count && Result.isOk res do
+            match lst.[i] with
+            | :? YANGGroupingRef as r ->
+                
+                res <-
+                    // Verify the validity of the reference
+                    r.EnsureRefs()
+                    >>= (fun _ ->
+                    
+                        // Remove the reference from the list of nodes
+                        // and replace it with the actual expanded nodes.
+                        lst.RemoveAt(i)
+                        i <- max (r.InsertNodesIn(i, lst)) (i + 1)
+                        Ok ()
+
+                    )
+
+            // Ignore any other node
+            | _ ->
+                i <- i + 1
+        
+        res
+
+
+
+// -------------------------------------------------------------------
+// Implementation of all the supported data nodes
 // -------------------------------------------------------------------
 
 and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
@@ -1219,12 +1364,17 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
     member val DataNodes = ResizeArray<YANGDataNode>()
 
     member val ExportedTypes = Dictionary<YANGName, YANGType>()
+    member val ExportedGroupings = Dictionary<YANGName, YANGGrouping>()
 
     override this.EnsureRefs() =
-        this.DataNodes
-        |> Seq.cast<YANGNode>
-        |> Seq.append (this.ExportedTypes.Values |> Seq.cast<YANGNode>)
-        |> foldResult (fun _ node -> node.EnsureRefs()) ()
+        YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
+        >>= (fun _ ->
+            this.DataNodes
+            |> Seq.cast<YANGNode>
+            |> Seq.append (this.ExportedTypes.Values |> Seq.cast<YANGNode>)
+            |> Seq.append (this.ExportedGroupings.Values |> Seq.cast<YANGNode>)
+            |> foldResult (fun _ node -> node.EnsureRefs()) ()
+        )
 
 
 and YANGModuleRevision(date: DateTime) =
@@ -1243,9 +1393,21 @@ and YANGContainer(name) =
 
     member val Presence: string = null with get, set
 
-    override this.EnsureRefs() =
+    override this.ReplaceNamespace ns =
+        let c = 
+            YANGContainer(
+                { Name = name.Name; Namespace = ns },
+                Description = this.Description,
+                Reference = this.Reference,
+                Status = this.Status,
+                Presence = this.Presence
+            )
+
         this.DataNodes
-        |> foldResult (fun _ node -> node.EnsureRefs()) ()
+        |> Seq.map (fun x -> x.ReplaceNamespace(ns))
+        |> Seq.iter c.DataNodes.Add
+
+        c :> _
     
 
 and YANGLeaf(name) =
@@ -1271,6 +1433,18 @@ and YANGLeaf(name) =
                 Ok()
         )
 
+    override this.ReplaceNamespace ns =
+        YANGLeaf(
+            { Name = name.Name; Namespace = ns },
+            Description = this.Description,
+            Reference = this.Reference,
+            Status = this.Status,
+            Type = this.Type,
+            Units = this.Units,
+            Default = this.Default,
+            Mandatory = this.Mandatory
+        ) :> _
+
 
 and YANGLeafList(name) =
     inherit YANGDataNode(name)
@@ -1284,6 +1458,19 @@ and YANGLeafList(name) =
     override this.EnsureRefs() =
         this.Type.EnsureRefs()
 
+    override this.ReplaceNamespace ns =
+        YANGLeafList(
+            { Name = name.Name; Namespace = ns },
+            Description = this.Description,
+            Reference = this.Reference,
+            Status = this.Status,
+            MaxElements = this.MaxElements,
+            MinElements = this.MinElements,
+            OrderedBy = this.OrderedBy,
+            Type = this.Type,
+            Units = this.Units
+        ) :> _
+
 
 and YANGList(name) =
     inherit YANGDataNodeContainer(name)
@@ -1293,6 +1480,21 @@ and YANGList(name) =
     member val OrderedBy = YANGListOrderedBy.System with get, set
     member val Unique = ResizeArray<string>()
 
-    override this.EnsureRefs() =
+    override this.ReplaceNamespace ns =
+        let l =
+            YANGList(
+                { Name = name.Name; Namespace = ns },
+                Description = this.Description,
+                Reference = this.Reference,
+                Status = this.Status,
+                MaxElements = this.MaxElements,
+                MinElements = this.MinElements,
+                OrderedBy = this.OrderedBy
+            )
+        l.Unique.AddRange(this.Unique)
+        
         this.DataNodes
-        |> foldResult (fun _ node -> node.EnsureRefs()) ()
+        |> Seq.map (fun x -> x.ReplaceNamespace(ns))
+        |> Seq.iter l.DataNodes.Add
+        
+        l :> _

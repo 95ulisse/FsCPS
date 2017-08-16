@@ -81,8 +81,8 @@ let identifier : SchemaParser<YANGName> =
             Ok(fullName)
         | Error(l) -> Error(l)
 
-/// Argument parser for a reference to a type.
-let typeRef : SchemaParser<_> =
+/// Argument parser for a reference to an entity.
+let entityRef : SchemaParser<_> =
     fun ctx ->
         match arg StatementParsers.ref ctx with
         | Ok((prefix, name)) ->  Ok(None, prefix, name, ctx.Scope)
@@ -202,7 +202,7 @@ ptypeRef :=
     createSpec
         "type"
         YANGTypeRef
-        typeRef
+        entityRef
         (anyOf [
             property "fraction-digits" uint Optional (fun node digits _ ->
                 node.SetProperty(YANGTypeProperties.FractionDigits, int digits)
@@ -255,34 +255,12 @@ let ptypedef : StatementSpec<YANGType> =
 
 // Parsers for all the data nodes.
 // They are all forwarded because they are all mutually recursive.
-let pcontainer, pcontainerRef: StatementSpec<YANGContainer> * _  = createSpecForwaredToRef "container"  Required
-let pleaf,      pleafRef:      StatementSpec<YANGLeaf> * _       = createSpecForwaredToRef "leaf"       Required
-let pleaflist,  pleaflistRef:  StatementSpec<YANGLeafList> * _   = createSpecForwaredToRef "leaf-list"  Required
-let plist,      plistRef:      StatementSpec<YANGList> * _       = createSpecForwaredToRef "list"       Required
-
-pcontainerRef :=
-    createSpec
-        "container"
-        YANGContainer
-        identifier
-        (anyOf [
-            // Container-specific properties
-            prop any    Optional <@ fun x -> x.Presence @>;
-
-            // Common properties for data nodes
-            prop any    Optional <@ fun x -> x.Description @>;
-            prop any    Optional <@ fun x -> x.Reference @>;
-            prop status Optional <@ fun x -> x.Status @>;
-
-            // Typedefs
-            child ptypedef Many (fun _ _ _ -> Ok());
-
-            // Data statements
-            chld pcontainer Many <@ fun x -> x.DataNodes @>;
-            chld pleaf      Many <@ fun x -> x.DataNodes @>;
-            chld pleaflist  Many <@ fun x -> x.DataNodes @>;
-            chld plist      Many <@ fun x -> x.DataNodes @>;
-        ])
+let pleaf,      pleafRef:      StatementSpec<YANGLeaf> * _        = createSpecForwaredToRef "leaf"       Required
+let pleaflist,  pleaflistRef:  StatementSpec<YANGLeafList> * _    = createSpecForwaredToRef "leaf-list"  Required
+let pcontainer, pcontainerRef: StatementSpec<YANGContainer> * _   = createSpecForwaredToRef "container"  Required
+let plist,      plistRef:      StatementSpec<YANGList> * _        = createSpecForwaredToRef "list"       Required
+let pgrouping,  pgroupingRef:  StatementSpec<YANGGrouping> * _    = createSpecForwaredToRef "grouping"   Required
+let puses,      pusesRef:      StatementSpec<YANGGroupingRef> * _ = createSpecForwaredToRef "uses"       Required
 
 pleafRef :=
     createSpec
@@ -329,6 +307,34 @@ pleaflistRef :=
             prop status  Optional <@ fun x -> x.Status @>;
         ])
 
+pcontainerRef :=
+    createSpec
+        "container"
+        YANGContainer
+        identifier
+        (anyOf [
+            // Container-specific properties
+            prop any    Optional <@ fun x -> x.Presence @>;
+
+            // Common properties for data nodes
+            prop any    Optional <@ fun x -> x.Description @>;
+            prop any    Optional <@ fun x -> x.Reference @>;
+            prop status Optional <@ fun x -> x.Status @>;
+
+            // Typedefs
+            child ptypedef Many (fun _ _ _ -> Ok());
+
+            // Data statements
+            chld pcontainer Many <@ fun x -> x.DataNodes @>;
+            chld pleaf      Many <@ fun x -> x.DataNodes @>;
+            chld pleaflist  Many <@ fun x -> x.DataNodes @>;
+            chld plist      Many <@ fun x -> x.DataNodes @>;
+
+            // Groupings
+            child pgrouping Many (fun _ _ _ -> Ok());
+            chld  puses     Many <@ fun x -> x.DataNodes @>;
+        ])
+
 plistRef :=
     createSpec
         "list"
@@ -353,6 +359,53 @@ plistRef :=
             chld pleaf      Many <@ fun x -> x.DataNodes @>;
             chld pleaflist  Many <@ fun x -> x.DataNodes @>;
             chld plist      Many <@ fun x -> x.DataNodes @>;
+
+            // Groupings
+            child pgrouping Many (fun _ _ _ -> Ok());
+            chld  puses     Many <@ fun x -> x.DataNodes @>;
+        ])
+
+pgroupingRef :=
+    createSpec
+        "grouping"
+        YANGGrouping
+        identifier
+        (anyOf [
+            // Description properties
+            prop any     Optional <@ fun x -> x.Description @>;
+            prop any     Optional <@ fun x -> x.Reference @>;
+            prop status  Optional <@ fun x -> x.Status @>;
+
+            // Typedefs
+            child ptypedef Many (fun _ _ _ -> Ok());
+
+            // Data statements
+            chld pcontainer Many <@ fun x -> x.DataNodes @>;
+            chld pleaf      Many <@ fun x -> x.DataNodes @>;
+            chld pleaflist  Many <@ fun x -> x.DataNodes @>;
+            chld plist      Many <@ fun x -> x.DataNodes @>;
+
+            // Groupings
+            child pgrouping Many (fun _ _ _ -> Ok());
+            chld  puses     Many <@ fun x -> x.DataNodes @>;
+        ])
+
+    // Registers the new grouping in the context automatically
+    >=> (fun g ctx ->
+        ctx.Scope.RegisterGrouping(g)
+        |> Result.map (fun _ -> g)
+    )
+
+pusesRef :=
+    createSpec
+        "uses"
+        YANGGroupingRef
+        entityRef
+        (anyOf [
+            // Description properties
+            prop any     Optional <@ fun x -> x.Description @>;
+            prop any     Optional <@ fun x -> x.Reference @>;
+            prop status  Optional <@ fun x -> x.Status @>;
         ])
 
 let pmodulerevision : StatementSpec<YANGModuleRevision> =
@@ -451,6 +504,10 @@ let pmodule : StatementSpec<YANGModule> =
                 chld pleaf      Many <@ fun x -> x.DataNodes @>;
                 chld pleaflist  Many <@ fun x -> x.DataNodes @>;
                 chld plist      Many <@ fun x -> x.DataNodes @>;
+
+                // Groupings
+                child pgrouping Many (fun x g _ -> x.ExportedGroupings.Add(g.Name, g); Ok());
+                chld  puses     Many <@ fun x -> x.DataNodes @>;
             ]
         ])
 

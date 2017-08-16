@@ -14,6 +14,9 @@
   ```
 
 - YANG parser:
+  - Do not clone groupings nodes when changing namespace, but make namespace depending on the parent
+    (like some sort of context for namespaces) (this was for groupings, but refinements have not been implemented
+	yet. They require copying the nodes, so I don't know if this would actually be useful.).
   - Add more builtin models.
   - Finish implementing the spec.
   - Refactor to make it more functional instead of OO.

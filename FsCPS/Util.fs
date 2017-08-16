@@ -6,6 +6,10 @@ type Result<'TOk, 'TError> =
 
 module internal Result =
 
+    let isOk = function
+        | Ok _ -> true
+        | Error _ -> false
+
     let fromOption opt =
         match opt with
         | Some x -> Ok x
