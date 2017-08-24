@@ -1,7 +1,13 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.26430.15
+VisualStudioVersion = 15.0.26730.10
 MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".paket", ".paket", "{C299B849-E24A-4ABA-B8C6-56C2F0FF819A}"
+	ProjectSection(SolutionItems) = preProject
+		paket.dependencies = paket.dependencies
+		paket.lock = paket.lock
+	EndProjectSection
+EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FsCPS", "FsCPS\FsCPS.fsproj", "{DC2D5E94-9E4C-4D2C-A638-DF893BA96D5E}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FsCPS.Tests", "FsCPS.Tests\FsCPS.Tests.fsproj", "{C48B34AD-6C78-4B31-9F1A-09964CBFB3A1}"
@@ -39,5 +45,8 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{0E91332D-3AEB-4BDE-9147-BDA423A4ADD7} = {D56C2266-8088-425F-A127-9AB58A9A792E}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {21ADA4D3-C86B-402A-8567-AE8F3429B51B}
 	EndGlobalSection
 EndGlobal

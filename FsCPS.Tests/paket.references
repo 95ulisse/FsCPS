@@ -1,0 +1,7 @@
+FSharp.Core
+FParsec
+FsCheck.Xunit
+System.ValueTuple
+xunit
+xunit.runner.console
+xunit.runner.visualstudio
