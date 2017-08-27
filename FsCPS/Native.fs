@@ -164,7 +164,7 @@ type internal NativeServerRegistrationRequest =
 module private Extern =
 
     [<Literal>]
-    let cpsLibrary = "libcps-api-common.so"
+    let cpsLibrary = "libopx_cps_api_common.so.1"
 
     // Library initialization
 

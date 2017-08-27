@@ -1,0 +1,28 @@
+os: linux
+dist: trusty
+sudo: required
+
+addons:
+  apt:
+    sources:
+    - mono
+    # Sources for OpenSwitch packages
+    - sourceline: 'deb http://dell-networking.bintray.com/opx-apt jessie main'
+      key_url: 'https://bintray.com/user/downloadSubjectPublicKey?username=dell-networking'
+    - sourceline: 'deb http://dl.bintray.com/open-switch/opx-apt jessie main'
+      key_url: 'https://bintray.com/user/downloadSubjectPublicKey?username=open-switch'
+    # OpenSwitch packages require newer libraries, so add the Ubuntu Xenial sources
+    - sourceline: 'deb http://it.archive.ubuntu.com/ubuntu/ xenial main universe restricted multiverse'
+    - sourceline: 'deb http://security.ubuntu.com/ubuntu xenial-security main universe restricted multiverse'
+    - sourceline: 'deb http://it.archive.ubuntu.com/ubuntu/ xenial-updates main universe restricted multiverse'
+    packages:
+    - mono-devel
+    - msbuild
+    - fsharp
+    - opx-core
+
+install:
+  - mono .paket/paket.exe install
+script:
+  - msbuild /p:Configuration=Release FsCPS.sln
+  - sudo LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:" mono packages/xunit.runner.console/tools/xunit.console.exe FsCPS.Tests/bin/Release/FsCPS.Tests.dll -parallel none
