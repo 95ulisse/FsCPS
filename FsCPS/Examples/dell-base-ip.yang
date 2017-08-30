@@ -1,15 +1,18 @@
 
 
 module dell-base-ip {
-    namespace "http://www.dell.com/esg/networking/os10/dell-base-ip";
+    namespace "http://www.dellemc.com/networking/os10/dell-base-ip";
     prefix "base-ip";
 
-    organization "Dell Inc";
+	import dell-base-common {
+		prefix "base-cmn";
+	}
 
-    contact "http://www.dell.com/support/softwarecontacts";
+    organization "Dell EMC";
+
+    contact "http://www.dell.com/support";
 
     description "This model will support the configruation of IP address.
-    	***Depreciated****
 
     	";
 
@@ -17,27 +20,10 @@ module dell-base-ip {
         description "Initial version.";
     }
 
-	typedef logical-ifindex {
-        type uint32;
-        description
-            "Uniquely identifies any interface system-wide including
-            physical ports, LAG interfaces and Vlan interfaces";
-    }
 
-    typedef ipv4-address {
-        type binary {
-            length "4";
-        }
-        description
-            "This type denotes a IPv4 address as a 4 octet binary number
-            in network-byte order.";
-    }
-
-	list ipv4 {
-		key "vrf-id ifindex";
-		
-		leaf ifindex {
-	     	type logical-ifindex;
+	grouping common-ip-config-params {
+	    leaf ifindex {
+	     	type base-cmn:logical-ifindex;
 	      	description "The interface index";
 	    }		
 		leaf enabled {
@@ -57,15 +43,43 @@ module dell-base-ip {
 			type string;
 			description "The interfaces's name.";
 		}
+	}
+
+	list ipv4 {
+		key "vrf-id ifindex";
+		
+		uses common-ip-config-params;
 		
 		list address {			
 			key "ip";
 		    leaf ip {
-		      	type ipv4-address;
+		      	type base-cmn:ip-address;
 		      	description "IP address";
 		    }
 		    leaf prefix-length {
 		    	type uint8;
+		    }
+		     			
+		}		
+	}
+	
+	list ipv6 {
+		key "vrf-id ifindex";
+		
+		uses common-ip-config-params;
+
+		leaf dup-addr-detect-transmits {
+			type uint32;			
+		}
+		
+		list address {			
+			key "ip";
+		    leaf ip {
+		      	type base-cmn:ip-address;
+		      	description "IP address";
+		    }
+		    leaf prefix-length {
+		    	type uint32;
 		    }
 		     			
 		}		

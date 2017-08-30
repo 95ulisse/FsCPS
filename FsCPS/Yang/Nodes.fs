@@ -83,7 +83,8 @@ and YANGParserOptions() as this =
                     | None -> ()
                     yield sprintf "%s.yang" name
                 ]
-                |> List.map Path.GetFullPath
+                |> List.allPairs (if this.ImportPaths = [] then [ "." ] else this.ImportPaths)
+                |> List.map Path.Combine
 
             // Check if one of the paths exists
             match paths |> List.tryFind File.Exists with
@@ -142,6 +143,8 @@ and YANGParserOptions() as this =
     // By default, report an error on an unknown statement
     let defaultUnknownStatement stmt =
         Error([ UnexpectedStatement(stmt) ])
+
+    member val ImportPaths: string list = List.empty<_> with get, set
 
     member val ResolveImport: string -> DateTime option -> SchemaParserResult<YANGModule> = defaultResolveImport with get, set
 

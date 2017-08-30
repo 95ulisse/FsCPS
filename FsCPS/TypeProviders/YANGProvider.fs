@@ -74,7 +74,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         [
             ProvidedStaticParameter("model", typeof<string>, "");
             ProvidedStaticParameter("fileName", typeof<string>, "");
-            ProvidedStaticParameter("rootPath", typeof<string>, "");
+            ProvidedStaticParameter("importPaths", typeof<string>, "");
         ]
 
     let nameNormalizerRegex = Regex("(?:^|-|\.)(\w)", RegexOptions.Compiled)
@@ -505,7 +505,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
 
     // Generates the root type for a module, and recursively generates all the types for the inner nodes
-    let generateRootTypeForModule typeName rootPath (m: YANGModule) =
+    let generateRootTypeForModule typeName (m: YANGModule) =
         
         // Generates the root type
         let rootType =
@@ -513,7 +513,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
         // Creates a new generation context
         let ctx = YANGProviderGenerationContext()
-        ctx.Push(m, rootType, CPSPath(rootPath))
+        ctx.Push(m, rootType, CPSPath(m.Prefix))
 
         // Generates common members for the root type
         generateCommonMembers ctx false |> ignore
@@ -538,12 +538,22 @@ type YANGProvider(config: TypeProviderConfig) as this =
     do
         yangProviderType.DefineStaticParameters(staticParams, (fun typeName args ->
             match args with
-            | [| :? string as model; :? string as fileName; :? string as rootPath |] ->
+            | [| :? string as model; :? string as fileName; :? string as importPaths |] ->
         
                 // Parser options
                 let options = YANGParserOptions(
+
                                   // Ignore unknown statements
-                                  UnknownStatement = fun _ -> Ok ()
+                                  UnknownStatement = (fun _ -> Ok ()),
+
+                                  // If a file name has been provided, resolve imports relative to the file's location,
+                                  // but if the user provided the paths explicitely, use them.
+                                  // The paths are provided as a colon-separated list of paths.
+                                  ImportPaths = match String.IsNullOrEmpty(importPaths), String.IsNullOrEmpty(fileName) with
+                                                | false, _ -> importPaths.Split([| ':' |], StringSplitOptions.RemoveEmptyEntries) |> Array.toList
+                                                | true, false -> [ Path.GetDirectoryName(fileName) ]
+                                                | true, true -> []
+
                               )
 
                 // Loads the model inline or from a file
@@ -557,10 +567,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
 
                 // Parses the model string and creates the root type
                 m
-                |>> (fun m ->
-                    let rootPath = if String.IsNullOrEmpty rootPath then m.Prefix else rootPath
-                    generateRootTypeForModule typeName rootPath m
-                )
+                |>> generateRootTypeForModule typeName
                 |> Result.mapError (List.map (fun e -> e.ToString()) >> String.concat String.Empty)
                 |> Result.okOrThrow failwith
 
