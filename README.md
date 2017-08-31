@@ -1,4 +1,4 @@
-# FsCPS
+# FsCPS [![Build Status](https://travis-ci.org/95ulisse/FsCPS.svg?branch=master)](https://travis-ci.org/95ulisse/FsCPS)
 
 F# bindings and type providers for the Control Plane Services API.
 
