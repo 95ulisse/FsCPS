@@ -1,0 +1,27 @@
+type file
+id
+    FsCPS
+authors
+    Marco Cameriero
+owners
+    Marco Cameriero
+projectUrl
+    https://github.com/95ulisse/FsCPS
+licenseUrl
+    https://github.com/95ulisse/FsCPS/blob/master/LICENSE.md
+requireLicenseAcceptance
+    false
+copyright
+    Copyright 2017
+tags
+    networking cps control-plane switch fsharp type-providers
+summary
+    F# bindings and type providers for the Control Plane Services API.
+description
+    F# bindings and type providers for the Control Plane Services API.
+dependencies
+    FSharp.Core ~> LOCKEDVERSION
+    FParsec ~> LOCKEDVERSION
+files
+    bin/Release/FsCPS.dll ==> lib/net45
+    bin/Release/FsCPS.xml ==> lib/net45

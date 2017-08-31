@@ -4,3 +4,4 @@ out
 packages
 .vs
 .idea
+*.nupkg
