@@ -56,3 +56,5 @@
 - Update the examples to reflect the new API.
 
 - Create a Nuget packet.
+
+- More docs.
