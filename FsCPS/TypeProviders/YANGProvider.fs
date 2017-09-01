@@ -574,3 +574,15 @@ type YANGProvider(config: TypeProviderConfig) as this =
             | _ -> failwith "Unsupported static parameters."
         ))
         this.AddNamespace(ns, [ yangProviderType ])
+
+    // Type providers are loaded in a different context than the other dependencies,
+    // so this makes its own dependencies impossible to find. We must ensure manually
+    // that the provider uses the dependencies linked with the final assembly.
+    do
+        AppDomain.CurrentDomain.add_AssemblyResolve(fun _ args ->
+            let asmName = AssemblyName(args.Name).Name + ".dll"
+            config.ReferencedAssemblies
+            |> Seq.tryFind (fun x -> Path.GetFileName(x) = asmName)
+            |> Option.map Assembly.LoadFrom
+            |> Option.defaultValue null
+        )
