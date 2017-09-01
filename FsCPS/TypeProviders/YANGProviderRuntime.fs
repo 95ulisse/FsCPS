@@ -253,8 +253,8 @@ module YANGProviderRuntime =
             member this.CPSObject
                 with get() = this.Object
 
-            member this.Access aid =
-                { this with Segments = Access (CPSAttributeID aid) :: this.Segments }
+            member this.Access path =
+                { this with Segments = Access (CPSPath(path).AttributeID.Value) :: this.Segments }
 
             member this.Indexer i =
                 { this with Segments = Indexer :: this.Segments;
@@ -282,8 +282,8 @@ module YANGProviderRuntime =
 
     [<EditorBrowsableAttribute(EditorBrowsableState.Never)>]
     [<CompilerMessageAttribute("This type is intended for use in generated code only.", 10001, IsHidden=true, IsError=false)>]
-    let validateObject (obj: CPSObject) (key: string) =
-        if obj.Key.Key = key then
+    let validateObject (obj: CPSObject) (path: string) =
+        if obj.Key.Key = CPSKey(CPSQualifier.Target, CPSPath path).Key then
             Ok (PathBuilder.FromObject obj)
         else
             Error MismatchingKey

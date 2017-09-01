@@ -307,7 +307,6 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 |> List.fold (fun name t -> name + t.Name) String.Empty
 
             let pathExpr = Expr.Value(ctx.CurrentPath.ToString(), typeof<string>)
-            let keyExpr = Expr.Value(CPSKey(CPSQualifier.Target, ctx.CurrentPath).Key, typeof<string>)
 
             // The parameterless method constructs a new object
             let parameterlessFactoryMethod =
@@ -327,7 +326,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                     [ ProvidedParameter("obj", typeof<CPSObject>) ],
                     returnType,
                     InvokeCode = (fun args ->
-                        <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(keyExpr) @@>
+                        <@@ YANGProviderRuntime.validateObject (%%(args.[0]) : CPSObject) %%(pathExpr) @@>
                     ),
                     IsStaticMethod = true
                 )
@@ -336,10 +335,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
 
     // Common getter for leaf data nodes.
-    and leafPropertyGetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
+    and leafPropertyGetter t (CPSPath path) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            (%%(args.[0]) : PathBuilder).Access(attrId).ReadLeaf<obj>()
+            (%%(args.[0]) : PathBuilder).Access(path).ReadLeaf<obj>()
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -348,10 +347,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
                (fun m args -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), args))
 
     // Common setter for leaf data nodes.
-    and leafPropertySetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
+    and leafPropertySetter t (CPSPath path) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            (%%(args.[0]) : PathBuilder).Access(attrId).WriteLeaf(None)
+            (%%(args.[0]) : PathBuilder).Access(path).WriteLeaf(None)
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -360,10 +359,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
                (fun m _ -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), [ args.[1] ]))
 
     // Common getter for leaf-list nodes
-    and leafListPropertyGetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
+    and leafListPropertyGetter t (CPSPath path) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            (%%(args.[0]) : PathBuilder).Access(attrId).ReadLeafList<obj>()
+            (%%(args.[0]) : PathBuilder).Access(path).ReadLeafList<obj>()
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -372,10 +371,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
                (fun m args -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), args))
 
     // Common setter for leaf-list nodes
-    and leafListPropertySetter t (CPSAttributeID attrId) (args: Quotations.Expr list) =
+    and leafListPropertySetter t (CPSPath path) (args: Quotations.Expr list) =
         <@@
             // Adds the current path to the attribute segments and gets/sets the value
-            (%%(args.[0]) : PathBuilder).Access(attrId).WriteLeafList(None)
+            (%%(args.[0]) : PathBuilder).Access(path).WriteLeafList(None)
         @@>
 
         // Ensure that the core method is called with the correct generic parameter
@@ -384,7 +383,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                (fun m _ -> (ProvidedTypeBuilder.MakeGenericMethod(m.GetGenericMethodDefinition(), [ t ]), [ args.[1] ]))
             
     // Common getter for containers and lists that erases to an object construction.
-    and constructorGetter (t: Type) currentAttrId (args: Quotations.Expr list) = 
+    and constructorGetter (t: Type) currentPath (args: Quotations.Expr list) = 
 
         // Constructor for the container type
         let ctor =
@@ -399,10 +398,10 @@ type YANGProvider(config: TypeProviderConfig) as this =
         
         // Constructs a new instance of the erased type passing the same object,
         // but adding a segment to the access path. In case no path has been provided, it is considered an indexer getter.
-        match currentAttrId with
-        | Some (CPSAttributeID attrId) ->
+        match currentPath with
+        | Some (CPSPath path) ->
             <@@
-                ignore ((%%(args.[0]) : PathBuilder).Access(attrId))
+                ignore ((%%(args.[0]) : PathBuilder).Access(path))
             @@>
         | None ->
             <@@
@@ -431,8 +430,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
     // Adds new nested types for containers, lists and leaf-lists. For the leafs,
     // corresponding instance properties are also added.
     and generateTypesForNode (ctx: YANGProviderGenerationContext) (node: YANGDataNode) =
-        let currentAttrId = ctx.CurrentPath.Append(node.Name.Name).AttributeID
-                            |> Option.get
+        let currentPath = ctx.CurrentPath.Append(node.Name.Name)
         match node with
 
         | :? YANGLeaf as leaf ->
@@ -445,8 +443,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName leaf.Name.Name,
                     makeOptionType leafType,
-                    GetterCode = leafPropertyGetter leafType currentAttrId,
-                    SetterCode = leafPropertySetter leafType currentAttrId
+                    GetterCode = leafPropertyGetter leafType currentPath,
+                    SetterCode = leafPropertySetter leafType currentPath
                 )
             if not (isNull leaf.Description) then
                 prop.AddXmlDoc(leaf.Description)
@@ -462,7 +460,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName container.Name.Name,
                     containerType,
-                    GetterCode = containerPropertyGetter containerType currentAttrId
+                    GetterCode = containerPropertyGetter containerType currentPath
                 )
             if not (isNull container.Description) then
                 prop.AddXmlDoc(container.Description)
@@ -478,8 +476,8 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName leafList.Name.Name,
                     makeOptionType (makeListType leafType),
-                    GetterCode = leafListPropertyGetter leafType currentAttrId,
-                    SetterCode = leafListPropertySetter leafType currentAttrId
+                    GetterCode = leafListPropertyGetter leafType currentPath,
+                    SetterCode = leafListPropertySetter leafType currentPath
                 )
             if not (isNull leafList.Description) then
                 prop.AddXmlDoc(leafList.Description)
@@ -495,7 +493,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
                 ProvidedProperty(
                     normalizeName list.Name.Name,
                     containerType,
-                    GetterCode = listPropertyGetter containerType currentAttrId
+                    GetterCode = listPropertyGetter containerType currentPath
                 )
             if not (isNull list.Description) then
                 prop.AddXmlDoc(list.Description)
