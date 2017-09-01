@@ -20,8 +20,8 @@ summary
 description
     F# bindings and type providers for the Control Plane Services API.
 dependencies
-    FSharp.Core ~> LOCKEDVERSION
-    FParsec ~> LOCKEDVERSION
+    FSharp.Core >= 4.0.0.1
+    FParsec >= 1.0.1
 files
     bin/Release/FsCPS.dll ==> lib/net45
     bin/Release/FsCPS.xml ==> lib/net45
