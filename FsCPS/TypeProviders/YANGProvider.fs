@@ -10,9 +10,7 @@ open System.Text.RegularExpressions
 open Microsoft.FSharp.Core.CompilerServices
 open Microsoft.FSharp.Quotations
 open Microsoft.FSharp.Quotations.Patterns
-open Microsoft.FSharp.Quotations.DerivedPatterns
 open Microsoft.FSharp.Quotations.ExprShape
-open Microsoft.FSharp.Reflection
 open ProviderImplementation
 open ProviderImplementation.ProvidedTypes
 open ProviderImplementation.ProvidedTypes.UncheckedQuotations
@@ -129,9 +127,48 @@ type YANGProvider(config: TypeProviderConfig) as this =
         patchMethodCallWithOther template <| fun receiver method args ->
                                                  let (newMethod, newArgs) = replacer method args
                                                  match receiver with
-                                                 | Some r -> Expr.Call(r, newMethod, newArgs)
-                                                 | None -> Expr.Call(newMethod, newArgs)
+                                                 | Some r -> Expr.CallUnchecked(r, newMethod, newArgs)
+                                                 | None -> Expr.CallUnchecked(newMethod, newArgs)
 
+    // Maps a YANG enumeration to a .NET enum.
+    // Creates and caches all the provided types to avoid polluting the namespace
+    let enumTypeCache = Dictionary<YANGType, ProvidedTypeDefinition>()
+    let generateEnumType (ctx: YANGProviderGenerationContext) (yangType: YANGType) =
+        match yangType with
+        | Enumeration values ->
+            match enumTypeCache.TryGetValue(yangType) with
+            | true, t -> t
+            | _ ->
+
+                // No cached type matches the YANG type, so we need to create a new one.
+                let t = ProvidedTypeDefinition(normalizeName yangType.Name.Name, Some typeof<int>, HideObjectMethods = true)
+                let ctor =
+                    ProvidedConstructor(
+                        [ ProvidedParameter("value", typeof<int>) ],
+                        InvokeCode = (fun args -> <@@ %%(args.[0]) : int @@>)
+                    )
+                t.AddMember(ctor)
+                ctx.RootType.AddMember(t)
+
+                // Add all the enumeration values to the new .NET enum
+                values
+                |> Seq.map (fun v ->
+                    ProvidedProperty(
+                        normalizeName v.Name,
+                        t,
+                        IsStatic = true,
+                        GetterCode = (fun _ -> Expr.NewObject(ctor, [ Expr.Value(v.Value.Value, typeof<int>) ]))
+                    )
+                )
+                |> Seq.iter t.AddMember
+
+                // Cache the new type
+                enumTypeCache.Add(yangType, t)
+
+                t
+
+        | _ ->
+            invalidArg "yangType" "Expected enumeration type."
 
     // Returns the actual type to use for the given YANG type.
     // Tries to use pritive types as far as it can, otherwise (like in the case
@@ -151,7 +188,7 @@ type YANGProvider(config: TypeProviderConfig) as this =
         | String         -> typeof<string>
         | Binary         -> typeof<byte[]>
         | Decimal64      -> typeof<double>
-        | Enumeration _  -> typeof<byte[]> // TODO: Enumerations not implemented.
+        | Enumeration _  -> generateEnumType ctx yangType :> _
         | Union _        -> typeof<byte[]> // TODO: Unions not implemented.
         | _ ->
             failwithf "Unexpected primitive type %A." yangType.PrimitiveType.Name

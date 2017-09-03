@@ -162,23 +162,23 @@ There are 4 YANG data nodes supported by the provider:
 
 YANG types are mapped to .NET types according to the following table:
 
-| YANG type     |    | .NET Type           | Notes                |
-|---------------|----|---------------------|----------------------|
-| `empty`       | -> | `unit`              |                      |
-| `boolean`     | -> | `bool`              |                      |
-| `int8`        | -> | `int8`              |                      |
-| `int16`       | -> | `int16`             |                      |
-| `int32`       | -> | `int32`             |                      |
-| `int64`       | -> | `int64`             |                      |
-| `uint8`       | -> | `uint8`             |                      |
-| `uint16`      | -> | `uint16`            |                      |
-| `uint32`      | -> | `uint32`            |                      |
-| `uint64`      | -> | `uint64`            |                      |
-| `string`      | -> | `string`            |                      |
-| `binary`      | -> | `byte`              |                      |
-| `decimal64`   | -> | `double`            |                      |
-| `enumeration` | -> | \<not implemented\> | Not yet implemented. |
-| `union`       | -> | \<not implemented\> | Not yet implemented. |
+| YANG type     |    | .NET Type  | Notes                                                                     |
+|---------------|----|------------|---------------------------------------------------------------------------|
+| `empty`       | -> | `unit`     |                                                                           |
+| `boolean`     | -> | `bool`     |                                                                           |
+| `int8`        | -> | `int8`     |                                                                           |
+| `int16`       | -> | `int16`    |                                                                           |
+| `int32`       | -> | `int32`    |                                                                           |
+| `int64`       | -> | `int64`    |                                                                           |
+| `uint8`       | -> | `uint8`    |                                                                           |
+| `uint16`      | -> | `uint16`   |                                                                           |
+| `uint32`      | -> | `uint32`   |                                                                           |
+| `uint64`      | -> | `uint64`   |                                                                           |
+| `string`      | -> | `string`   |                                                                           |
+| `binary`      | -> | `byte`     |                                                                           |
+| `decimal64`   | -> | `double`   |                                                                           |
+| `enumeration` | -> | `int32`    | An erased enum-like type is generated containing all the possible values. |
+| `union`       | -> | `byte[]`   | Not yet implemented.                                                      |
 
 
 
