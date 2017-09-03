@@ -68,6 +68,7 @@
     <Compile Include="Yang\Nodes.fs" />
     <Compile Include="Yang\Combinators.fs" />
     <Compile Include="Yang\SchemaParsers.fs" />
+    <Compile Include="Yang\ActivePatterns.fs" />
     <Compile Include="TypeProviders\Validation.fs" />
     <Compile Include="TypeProviders\YANGProviderRuntime.fs" />
     <Compile Include="TypeProviders\YANGProvider.fs" />

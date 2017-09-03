@@ -972,9 +972,6 @@ and YANGPrimitiveTypes private () =
             }
         allValues t
 
-    static member internal AllValues t prop =
-        allValues t prop
-
     static member val Empty = {
         new YANGType({ Namespace = YANGNamespace.Default; Name = "empty" }) with
 

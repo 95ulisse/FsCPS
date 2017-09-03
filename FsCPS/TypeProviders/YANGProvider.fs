@@ -138,21 +138,21 @@ type YANGProvider(config: TypeProviderConfig) as this =
     // of enums and unions) generates a new type.
     let generateLeafType (ctx: YANGProviderGenerationContext) (yangType: YANGType) =
         match yangType.PrimitiveType with
-        | x when x = YANGPrimitiveTypes.Empty       -> typeof<unit>
-        | x when x = YANGPrimitiveTypes.Boolean     -> typeof<bool>
-        | x when x = YANGPrimitiveTypes.Int8        -> typeof<int8>
-        | x when x = YANGPrimitiveTypes.Int16       -> typeof<int16>
-        | x when x = YANGPrimitiveTypes.Int32       -> typeof<int32>
-        | x when x = YANGPrimitiveTypes.Int64       -> typeof<int64>
-        | x when x = YANGPrimitiveTypes.UInt8       -> typeof<uint8>
-        | x when x = YANGPrimitiveTypes.UInt16      -> typeof<uint16>
-        | x when x = YANGPrimitiveTypes.UInt32      -> typeof<uint32>
-        | x when x = YANGPrimitiveTypes.UInt64      -> typeof<uint64>
-        | x when x = YANGPrimitiveTypes.String      -> typeof<string>
-        | x when x = YANGPrimitiveTypes.Binary      -> typeof<byte[]>
-        | x when x = YANGPrimitiveTypes.Decimal64   -> typeof<double>
-        | x when x = YANGPrimitiveTypes.Enumeration -> typeof<byte[]> // TODO: Enumerations not implemented.
-        | x when x = YANGPrimitiveTypes.Union       -> typeof<byte[]> // TODO: Unions not implemented.
+        | Empty          -> typeof<unit>
+        | Boolean        -> typeof<bool>
+        | Int8           -> typeof<int8>
+        | Int16          -> typeof<int16>
+        | Int32          -> typeof<int32>
+        | Int64          -> typeof<int64>
+        | UInt8          -> typeof<uint8>
+        | UInt16         -> typeof<uint16>
+        | UInt32         -> typeof<uint32>
+        | UInt64         -> typeof<uint64>
+        | String         -> typeof<string>
+        | Binary         -> typeof<byte[]>
+        | Decimal64      -> typeof<double>
+        | Enumeration _  -> typeof<byte[]> // TODO: Enumerations not implemented.
+        | Union _        -> typeof<byte[]> // TODO: Unions not implemented.
         | _ ->
             failwithf "Unexpected primitive type %A." yangType.PrimitiveType.Name
         
