@@ -95,7 +95,7 @@ module Native =
         // Folds the objects into a list
         let list =
             objects
-            |> foldResult
+            |> Result.foldSequence
                 NativeMethods.AppendObjectToList
                 (NativeMethods.CreateObjectList() |> Result.okOrThrow invalidOp)
             |> Result.okOrThrow invalidOp

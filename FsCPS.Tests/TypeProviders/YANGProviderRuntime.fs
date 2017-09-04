@@ -49,7 +49,7 @@ module YANGProviderRuntime =
         (List.length attrs) >= 2 ==> lazy (
             let o = CPSObject(CPSKey "1.34.")
             o |> YANGProviderRuntime.writeLeaf<int> (attrs |> List.map Access) [] (Some 1)
-            attrs |> foldi (fun attr i aid ->
+            attrs |> List.indexed |> List.fold (fun attr (i, aid) ->
                 match attr with
                 | Container (_, inner) -> Map.find aid inner
                 | Leaf (_, [| 1uy; 0uy; 0uy; 0uy |]) when i = attrs.Length - 1 -> attr
@@ -82,7 +82,7 @@ module YANGProviderRuntime =
             o |> YANGProviderRuntime.writeLeaf<int> (attrs |> List.map Access) [] (Some 2)
 
             // Check that all the containers and the intermediate leafs exist
-            attrs |> foldi (fun attr i aid ->
+            attrs |> List.indexed |> List.fold (fun attr (i, aid) ->
                 match attr with
                 | Container (_, inner) ->
                     Assert.True((Map.tryFind (CPSAttributeID 0UL) inner).IsSome)
@@ -110,7 +110,7 @@ module YANGProviderRuntime =
             o |> YANGProviderRuntime.writeLeaf<int> path indices (Some 1)
 
             // Checks the validity of the lists
-            attrs |> foldi (fun attr i aid ->
+            attrs |> List.indexed |> List.fold (fun attr (i, aid) ->
                 match attr with
                 | Container (_, inner) ->
                     match Map.find aid inner with

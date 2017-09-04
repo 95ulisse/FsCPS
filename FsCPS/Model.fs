@@ -304,7 +304,7 @@ type CPSObject(key: CPSKey) =
         >>= (fun nativeObject ->
             this.Attributes
             |> Map.toSeq
-            |> foldResult (fun _ (_, attr) ->
+            |> Result.foldSequence (fun _ (_, attr) ->
                 attr.AddToNativeObject(nativeObject, idStack)
             ) ()
             |>> (fun _ -> nativeObject)
@@ -326,7 +326,7 @@ type CPSObject(key: CPSKey) =
         // Iterate the attributes and copy them into the object
         |> Result.tee (fun o ->
             NativeMethods.BeginAttributeIterator(nativeObject).Iterate()
-            |> foldResult (fun _ it ->
+            |> Result.foldSequence (fun _ it ->
                 CPSAttribute.FromIterator it
                 |>> o.SetAttribute
             ) ()
@@ -436,7 +436,7 @@ and CPSAttribute =
             // Be sure that the list gets added to the object, even though it's empty
             match lst with
             | [] -> NativeMethods.AddNestedAttribute obj aid Array.empty<_>
-            | _ -> lst |> foldResult (fun () arr -> NativeMethods.AddNestedAttribute obj aid arr) ()
+            | _ -> lst |> Result.foldSequence (fun () arr -> NativeMethods.AddNestedAttribute obj aid arr) ()
 
         | Container (_, lst) ->
 
@@ -444,7 +444,7 @@ and CPSAttribute =
             ids.Push(this.NativeAttributeID)
             lst
             |> Map.toSeq
-            |> foldResult (fun () (id, attr) ->
+            |> Result.foldSequence (fun () (id, attr) ->
                 // Sanity check to be sure that the user did not construct an inconsistent map.
                 if id <> attr.AttributeID then
                     Error (sprintf "Attribute IDs do not match: Map key has %A and attribute has %A." id attr.AttributeID)
@@ -457,11 +457,11 @@ and CPSAttribute =
 
             // Iterate the list and add each single attribute
             ids.Push(this.NativeAttributeID)
-            lst |> foldResult (fun i item ->
+            lst |> Result.foldSequence (fun i item ->
                 ids.Push(i)
                 item
                 |> Map.toSeq
-                |> foldResult (fun () (id, attr) ->
+                |> Result.foldSequence (fun () (id, attr) ->
                     // Sanity check to be sure that the user did not construct an inconsistent map.
                     if id <> attr.AttributeID then
                         Error (sprintf "Attribute IDs do not match: Map key has %A and attribute has %A." id attr.AttributeID)
@@ -513,7 +513,7 @@ and CPSAttribute =
                 
                 // Containers are just a list of attributes
                 it.Inside().Iterate()
-                |> foldResult (fun m innerIt ->
+                |> Result.foldSequence (fun m innerIt ->
                     CPSAttribute.FromIterator(innerIt)
                     |>> (fun attr -> Map.add attr.AttributeID attr m)
                 ) Map.empty
@@ -523,9 +523,9 @@ and CPSAttribute =
 
                 // Lists are implemented in binary form as a list of lists.
                 it.Inside().Iterate()
-                |> foldResult (fun outerList outerIt ->
+                |> Result.foldSequence (fun outerList outerIt ->
                     outerIt.Inside().Iterate()
-                    |> foldResult (fun innerMap innerIt ->
+                    |> Result.foldSequence (fun innerMap innerIt ->
                         CPSAttribute.FromIterator(innerIt)
                         |>> (fun innerAttr -> Map.add innerAttr.AttributeID innerAttr innerMap)
                     ) Map.empty
@@ -550,7 +550,7 @@ type CPSTransaction() =
 
         // Apply the operator to all the objects in the sequence
         objs
-        |> foldResult (fun _ o ->
+        |> Result.foldSequence (fun _ o ->
             o.ToNativeObject()
             >>= cb context
         ) ()
@@ -614,7 +614,7 @@ type CPSTransaction() =
 
         let readResponse (req: NativeGetParams) () =
             NativeMethods.IterateObjectList(req.list)
-            |> foldResult (fun objectList nativeObject ->
+            |> Result.foldSequence (fun objectList nativeObject ->
 
                 // Read the object and append the object to the list
                 CPSObject.FromNativeObject nativeObject
@@ -693,7 +693,7 @@ type CPSServerHandle internal (key: CPSKey, server: ICPSServer) =
         >>= protect server.Get
 
         // Converts the results to native objects and appends them to the native list
-        >>= foldResult (fun _ o ->
+        >>= Result.foldSequence (fun _ o ->
             o.ToNativeObject()
             |>> NativeMethods.AppendObjectToList req.list
             |>> ignore

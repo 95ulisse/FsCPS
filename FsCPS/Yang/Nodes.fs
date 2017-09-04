@@ -366,7 +366,7 @@ and [<AbstractClass>] YANGDataNodeContainer(name) =
         YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
         >>= (fun _ ->
             this.DataNodes
-            |> foldResult (fun _ node -> node.EnsureRefs()) ()
+            |> Result.foldSequence (fun _ node -> node.EnsureRefs()) ()
         )
 
 
@@ -676,11 +676,11 @@ and YANGType(name: YANGName) =
             let mutable allValues = baseValues
 
             // Checks that the new values have unique names and values
-            currentValues |> foldResult (fun _ v ->
+            currentValues |> Result.foldSequence (fun _ v ->
                 
                 // Checks that both the name and the value are unique
                 allValues
-                |> foldResult (fun _ oldValue ->
+                |> Result.foldSequence (fun _ oldValue ->
                     if v.Name = oldValue.Name then
                         Error([ DuplicateEnumName(v) ])
                     else if v.Value.IsSome && v.Value.Value = oldValue.Value.Value then
@@ -845,7 +845,7 @@ and YANGType(name: YANGName) =
 
             // Check that all the restrictions can be applied to this type
             >>= (fun () ->
-                foldResult (fun _ r ->
+                Result.foldSequence (fun _ r ->
                     if this.CanBeRestrictedWith(r) then
                         Ok()
                     else
@@ -1273,7 +1273,7 @@ and YANGGrouping(name) =
         YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
         >>= (fun _ ->
             this.DataNodes
-            |> foldResult (fun _ node -> node.EnsureRefs()) ()
+            |> Result.foldSequence (fun _ node -> node.EnsureRefs()) ()
         )
 
 
@@ -1373,7 +1373,7 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
             |> Seq.cast<YANGNode>
             |> Seq.append (this.ExportedTypes.Values |> Seq.cast<YANGNode>)
             |> Seq.append (this.ExportedGroupings.Values |> Seq.cast<YANGNode>)
-            |> foldResult (fun _ node -> node.EnsureRefs()) ()
+            |> Result.foldSequence (fun _ node -> node.EnsureRefs()) ()
         )
 
 

@@ -127,7 +127,9 @@ module YANGProviderRuntime =
 
             // Rebuild a list which is a clone of the extracted one, but with the i-th item modified
             if i < lst.Length then
-                lst |> foldi (fun state j x ->
+                lst
+                |> List.indexed
+                |> List.fold (fun state (j, x) ->
                     if i = j then
                         (f x) :: state
                     else
