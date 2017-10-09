@@ -73,6 +73,13 @@ type Range<'T> = {
     Max: 'T;
 }
 
+/// A node path is a path to a node in the data tree. 
+type NodePath =
+    {
+        IsAbsolute: bool;
+        Segments: (string option * string) list
+    }
+
 
 module internal StatementParsers =
 
@@ -319,3 +326,11 @@ module internal StatementParsers =
                     Reply(reply.Status, reply.Error)
 
         range pnumber Double.MinValue Double.MaxValue
+
+    let nodePath =
+        ws_nocomments
+         >>. opt (skipChar '/')
+        .>>. sepBy1 (opt (id .>>? skipChar ':') .>>. id) (skipChar '/')
+        .>>  ws_nocomments
+        .>>  eof
+        |>> (fun (beginSlash, segments) -> { IsAbsolute = beginSlash.IsSome; Segments = segments })

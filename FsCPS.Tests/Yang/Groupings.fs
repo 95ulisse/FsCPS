@@ -214,3 +214,49 @@ module Groupings =
         // Check that the namespace of the nodes is correct
         Assert.Equal([ "l" ], m.DataNodes |> Seq.map (fun x -> x.Name.Name))
         Assert.Equal(m.Namespace, m.DataNodes.[0].Name.Namespace)
+
+    [<Fact>]
+    let ``Grouping references augmentations require relative paths`` () =
+        let m =
+            Utils.CreateModule """
+                grouping my-grouping {}
+
+                uses my-grouping {
+                    augment /cont {
+                        leaf l {
+                            type int32;
+                        }
+                    }
+                }
+            """
+        match m with
+        | Error [ RelativeNodePathRequired _ ] -> ()
+        | _ -> invalidOp "Expected grouping augmentation failure."
+
+    [<Fact>]
+    let ``Grouping references can be augmented`` () =
+        let m =
+            Utils.CreateModule """
+                grouping my-grouping {
+                    container cont {
+                        leaf l1 {
+                            type int32;
+                        }
+                    }
+                }
+
+                uses my-grouping {
+                    augment cont {
+                        leaf l2 {
+                            type int32;
+                        }
+                    }
+                }
+            """
+            |> Result.okOrThrow (string >> invalidOp)
+        Assert.Equal(1, m.DataNodes.Count)
+        let c = m.DataNodes.[0] :?> YANGContainer
+        Assert.Equal("cont", c.Name.Name)
+        Assert.Equal(2, c.DataNodes.Count)
+        Assert.Equal("l1", c.DataNodes.[0].Name.Name)
+        Assert.Equal("l2", c.DataNodes.[1].Name.Name)

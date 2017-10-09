@@ -120,6 +120,13 @@ let orderedBy : SchemaParser<YANGListOrderedBy> =
         | "user" -> Ok(YANGListOrderedBy.User)
         | _ -> Error([ ArgumentParserError(ctx.Statement, "Invalid ordering. The passible values are `system` or `user`.") ])
 
+/// Argument parser for a node path
+let nodePath : SchemaParser<_> =
+    fun ctx ->
+        match arg StatementParsers.nodePath ctx with
+        | Ok(path) ->  Ok(path, ctx.Scope)
+        | Error(l) -> Error(l)
+
 /// Helper operator to execute an action after a parser only if it succeeds.
 let (>=>) (spec: StatementSpec<_>) f : StatementSpec<_> =
     {
@@ -255,12 +262,13 @@ let ptypedef : StatementSpec<YANGType> =
 
 // Parsers for all the data nodes.
 // They are all forwarded because they are all mutually recursive.
-let pleaf,      pleafRef:      StatementSpec<YANGLeaf> * _        = createSpecForwaredToRef "leaf"       Required
-let pleaflist,  pleaflistRef:  StatementSpec<YANGLeafList> * _    = createSpecForwaredToRef "leaf-list"  Required
-let pcontainer, pcontainerRef: StatementSpec<YANGContainer> * _   = createSpecForwaredToRef "container"  Required
-let plist,      plistRef:      StatementSpec<YANGList> * _        = createSpecForwaredToRef "list"       Required
-let pgrouping,  pgroupingRef:  StatementSpec<YANGGrouping> * _    = createSpecForwaredToRef "grouping"   Required
-let puses,      pusesRef:      StatementSpec<YANGGroupingRef> * _ = createSpecForwaredToRef "uses"       Required
+let pleaf,      pleafRef:      StatementSpec<YANGLeaf> * _         = createSpecForwaredToRef "leaf"       Required
+let pleaflist,  pleaflistRef:  StatementSpec<YANGLeafList> * _     = createSpecForwaredToRef "leaf-list"  Required
+let pcontainer, pcontainerRef: StatementSpec<YANGContainer> * _    = createSpecForwaredToRef "container"  Required
+let plist,      plistRef:      StatementSpec<YANGList> * _         = createSpecForwaredToRef "list"       Required
+let pgrouping,  pgroupingRef:  StatementSpec<YANGGrouping> * _     = createSpecForwaredToRef "grouping"   Required
+let puses,      pusesRef:      StatementSpec<YANGGroupingRef> * _  = createSpecForwaredToRef "uses"       Required
+let paugment,   paugmentRef:   StatementSpec<YANGAugmentation> * _ = createSpecForwaredToRef "augment"    Required
 
 pleafRef :=
     createSpec
@@ -406,6 +414,30 @@ pusesRef :=
             prop any     Optional <@ fun x -> x.Description @>;
             prop any     Optional <@ fun x -> x.Reference @>;
             prop status  Optional <@ fun x -> x.Status @>;
+
+            // Augment
+            child paugment Optional (fun node a ctx -> node.Augmentation <- Some a; Ok())
+        ])
+
+paugmentRef :=
+    createSpec
+        "augment"
+        YANGAugmentation
+        nodePath
+        (anyOf [
+
+            // Description properties
+            prop any     Optional <@ fun x -> x.Description @>;
+            prop any     Optional <@ fun x -> x.Reference @>;
+            prop status  Optional <@ fun x -> x.Status @>;
+
+            // Data nodes
+            chld pcontainer Many <@ fun x -> x.DataNodes @>;
+            chld pleaf      Many <@ fun x -> x.DataNodes @>;
+            chld pleaflist  Many <@ fun x -> x.DataNodes @>;
+            chld plist      Many <@ fun x -> x.DataNodes @>;
+            chld puses      Many <@ fun x -> x.DataNodes @>;
+
         ])
 
 let pmodulerevision : StatementSpec<YANGModuleRevision> =
@@ -508,6 +540,9 @@ let pmodule : StatementSpec<YANGModule> =
                 // Groupings
                 child pgrouping Many (fun x g _ -> x.ExportedGroupings.Add(g.Name, g); Ok());
                 chld  puses     Many <@ fun x -> x.DataNodes @>;
+
+                // Augmentations
+                chld  paugment  Many <@ fun x -> x.Augmentations @>
             ]
         ])
 

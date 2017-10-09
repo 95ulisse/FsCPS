@@ -344,9 +344,19 @@ and [<AbstractClass; AllowNullLiteral>] YANGNode() =
     abstract member EnsureRefs: unit -> SchemaParserResult<unit>
 
 
+/// Interface implemented by the nodes that can be navigated with a NodePath.
+and [<Interface; AllowNullLiteral>] internal IYANGNavigableNode =
+    abstract member SelectChild: YANGName -> IYANGNavigableNode option
+
+
 /// Base class for a YANG node that carries actual data.
 and [<AbstractClass>] YANGDataNode(name: YANGName) =
     inherit YANGNode()
+
+    // A data node must be navigable with a NodePath
+    interface IYANGNavigableNode with
+        member this.SelectChild(name) =
+            None
 
     member this.Name = name
     member val Description: string = null with get, set
@@ -359,6 +369,17 @@ and [<AbstractClass>] YANGDataNode(name: YANGName) =
 /// Base class for a YANG node which is a data node and can contain itself other data nodes.
 and [<AbstractClass>] YANGDataNodeContainer(name) =
     inherit YANGDataNode(name)
+
+    // A data node must be navigable with a NodePath
+    interface IYANGNavigableNode with
+        member this.SelectChild(name) =
+            this.DataNodes
+            |> Seq.tryFind (fun x -> x.Name = name)
+            |> Option.map (fun x -> x :> IYANGNavigableNode)
+
+    // DataNode containers are valid targets for augmentation
+    interface IYANGAugmentationTarget with
+        member this.DataNodes = this.DataNodes :> _
 
     member val DataNodes = ResizeArray<YANGDataNode>()
 
@@ -420,6 +441,7 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
     | CannotFindModule of string * seq<string>
     | CannotOpenModule of string * string
     | CannotFindModuleRevision of string * DateTime
+    | AlreadyUsedName of Statement * Statement
 
     // Types
     | ShadowedType of Statement * YANGType
@@ -433,6 +455,14 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
     // Groupings
     | UnresolvedGroupingRef of Statement * string
     | ShadowedGrouping of Statement * YANGGrouping
+
+    // Augmentations
+    | InvalidAugmentationTarget of Statement
+
+    // Node paths
+    | RelativeNodePathRequired of Statement
+    | AbsoluteNodePathRequired of Statement
+    | CannotResolvePath of Statement * string
 
     with
 
@@ -481,6 +511,8 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
                     None, (sprintf "Unable to open module \"%s\": %s" x y)
                 | CannotFindModuleRevision(x, y) ->
                     None, (sprintf "Unable to find imported module \"%s\" with revision %s. Searched paths: %s" x (y.ToString("yyyy-MM-dd")) (String.Join(Environment.NewLine, y)))
+                | AlreadyUsedName(x, y) ->
+                    Some x, (sprintf "Name already used by node at %A." y.Position)
                 | ShadowedType(x, y) ->
                     let stmt: Statement option = y.OriginalStatement
                     match stmt with
@@ -513,6 +545,14 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
                     match stmt with
                     | Some(s) -> Some x, (sprintf "This grouping shadows the grouping %A defined at %A." y.Name s.Position)
                     | None -> Some x, "This grouping shadows a grouping defined in an higher scope."
+                | InvalidAugmentationTarget(x) ->
+                    Some x, "Invalid augmentation target. Valid targets for augmentation are: container, list."
+                | RelativeNodePathRequired(x) ->
+                    Some x, "Relative node path required."
+                | AbsoluteNodePathRequired(x) ->
+                    Some x, "Absolute node path required."
+                | CannotResolvePath(x, y) ->
+                    Some x, (sprintf "Cannot resolve module path. Unable to find node %s." y)
             
             match stmt with
             | Some(s) -> sprintf "Statement \"%s\" (%A): %s" s.Name s.Position msg
@@ -1260,6 +1300,16 @@ and YANGPrimitiveTypes private () =
 // Groupings
 // -------------------------------------------------------------------
 
+// A fake navigable node used as a base node for augmentations.
+// This node allows augmentations to start from any arbitrary group of nodes.
+and internal FakeNavigableNode(lst: seq<YANGDataNode>) =
+    interface IYANGNavigableNode with
+        member __.SelectChild(name) =
+            lst
+            |> Seq.tryFind (fun x -> x.Name = name)
+            |> Option.map (fun x -> x :> IYANGNavigableNode)
+
+
 and YANGGrouping(name) =
     inherit YANGNode()
 
@@ -1291,6 +1341,7 @@ and internal YANGGroupingRef(resolvedGrouping: YANGGrouping option, prefix: stri
     member val Description: string = null with get, set
     member val Reference: string = null with get, set
     member val Status = YANGStatus.Current with get, set
+    member val Augmentation: YANGAugmentation option = None with get, set
 
     override this.EnsureRefs() =
         match resolved.Value with
@@ -1300,13 +1351,31 @@ and internal YANGGroupingRef(resolvedGrouping: YANGGrouping option, prefix: stri
     override __.ReplaceNamespace _ =
         invalidOp "Cannot replace the namespace on a fake node."
 
-    member internal __.InsertNodesIn(initialIndex, lst: IList<YANGDataNode>) =
+    member internal this.InsertNodesIn(initialIndex, lst: IList<YANGDataNode>) =
+        
+        // Insert the nodes
         let g = resolved.Value.Value
         g.DataNodes
         |> Seq.map (fun node -> node.ReplaceNamespace(scope.Module.Namespace))
         |> Seq.iteri (fun i node -> lst.Insert(initialIndex + i, node))
 
-        initialIndex + g.DataNodes.Count
+        // Apply the augmentation, if any
+        (
+            match this.Augmentation with
+            | None ->
+                Ok ()
+            | Some a ->
+                lst
+                |> Seq.skip initialIndex
+                |> Seq.take g.DataNodes.Count
+                |> FakeNavigableNode
+                |> (fun x -> x :> IYANGNavigableNode)
+                |> Some
+                |> a.Apply
+        )
+        
+        // Return the new index
+        |>> (fun _ -> initialIndex + g.DataNodes.Count)
 
     /// Replaces all the occurrencies of YANGGroupingRef nodes with the actual nodes in the grouping.
     static member internal ExpandGroupingRefs (lst: IList<YANGDataNode>) =
@@ -1324,8 +1393,8 @@ and internal YANGGroupingRef(resolvedGrouping: YANGGrouping option, prefix: stri
                         // Remove the reference from the list of nodes
                         // and replace it with the actual expanded nodes.
                         lst.RemoveAt(i)
-                        i <- max (r.InsertNodesIn(i, lst)) (i + 1)
-                        Ok ()
+                        r.InsertNodesIn(i, lst)
+                        |>> (fun newI -> i <- max newI (i + 1))
 
                     )
 
@@ -1337,12 +1406,109 @@ and internal YANGGroupingRef(resolvedGrouping: YANGGrouping option, prefix: stri
 
 
 
+
+// -------------------------------------------------------------------
+// Augmentations
+// -------------------------------------------------------------------
+
+/// Interface implemented by all the nodes that can be target for an augmentation
+and [<Interface>] internal IYANGAugmentationTarget =
+    abstract DataNodes: IList<YANGDataNode>
+
+and YANGAugmentation internal (nodePath: NodePath, scope: Scope) as this =
+    inherit YANGNode()
+
+    let resolvePrefix p =
+        match p with
+        | None ->
+            Ok scope.Module.Namespace
+        | Some prefix ->
+            scope.GetIncludedModule(prefix)
+            |> Option.map (fun m -> m.Namespace)
+            |> Result.fromOption
+            |> Result.mapError (fun _ -> [ UnknownPrefix(this.OriginalStatement.Value, prefix) ])
+
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+
+    member val DataNodes = ResizeArray<YANGDataNode>()
+
+    override this.EnsureRefs() =
+        YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
+        >>= (fun _ ->
+            this.DataNodes
+            |> Result.foldSequence (fun _ node -> node.EnsureRefs()) ()
+        )
+
+    /// Applies the augmentation to the target node
+    member internal this.Apply(baseNode: IYANGNavigableNode option) =
+        
+        // If no base node is provided, an absolute path is required
+        (
+            match baseNode with
+            | None ->
+                if nodePath.IsAbsolute then
+                    Ok (scope.Module :> IYANGNavigableNode)
+                else
+                    Error [ AbsoluteNodePathRequired(this.OriginalStatement.Value) ]
+            | Some b ->
+                if nodePath.IsAbsolute then
+                    Error [ RelativeNodePathRequired(this.OriginalStatement.Value) ]
+                else
+                    Ok b
+        )
+
+        // Navigate each single node to find the target
+        >>= (fun baseNode ->
+            nodePath.Segments
+            |> Result.foldSequence (fun (node: IYANGNavigableNode) (prefix, name) ->
+                
+                // Resolve the prefix, select the child, then continue
+                resolvePrefix prefix
+                >>= (fun ns ->
+                    node.SelectChild({ Name = name; Namespace = ns })
+                    |> Result.fromOption
+                    |> Result.mapError (fun _ -> [ CannotResolvePath(this.OriginalStatement.Value, name) ])
+                )
+
+            ) baseNode
+        )
+
+        // Check that the target is a valid augmentation target
+        >>= (fun targetNode ->
+            match targetNode with
+            | :? IYANGAugmentationTarget as target ->
+                
+                // Finally, add the new nodes to the target
+                this.DataNodes
+                |> Result.foldSequence (fun _ newNode ->
+                    target.DataNodes
+                    |> Seq.tryFind (fun x -> x.Name = newNode.Name)
+                    |> function
+                       | Some oldNode -> Error [ AlreadyUsedName(this.OriginalStatement.Value, oldNode.OriginalStatement.Value) ]
+                       | None ->
+                           target.DataNodes.Add(newNode)
+                           Ok ()
+                ) ()
+
+            | _ ->
+                Error [ InvalidAugmentationTarget this.OriginalStatement.Value ]
+        )
+
+
 // -------------------------------------------------------------------
 // Implementation of all the supported data nodes
 // -------------------------------------------------------------------
 
 and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
     inherit YANGNode()
+
+    interface IYANGNavigableNode with
+        member this.SelectChild(name) =
+            this.DataNodes
+            |> Seq.tryFind (fun x -> x.Name = name)
+            |> Option.map (fun x -> x :> IYANGNavigableNode)
     
     member this.Name
         with get() =
@@ -1366,14 +1532,21 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
     member val ExportedTypes = Dictionary<YANGName, YANGType>()
     member val ExportedGroupings = Dictionary<YANGName, YANGGrouping>()
 
+    member val Augmentations = ResizeArray<YANGAugmentation>()
+
     override this.EnsureRefs() =
+        // Expand groupingrefs, check that eveything is in place, then apply augmentations
         YANGGroupingRef.ExpandGroupingRefs(this.DataNodes)
         >>= (fun _ ->
             this.DataNodes
             |> Seq.cast<YANGNode>
             |> Seq.append (this.ExportedTypes.Values |> Seq.cast<YANGNode>)
             |> Seq.append (this.ExportedGroupings.Values |> Seq.cast<YANGNode>)
+            |> Seq.append (this.Augmentations |> Seq.cast<YANGNode>)
             |> Result.foldSequence (fun _ node -> node.EnsureRefs()) ()
+        )
+        >>= (fun _ ->
+            this.Augmentations |> Result.foldSequence (fun _ aug -> aug.Apply(None)) ()
         )
 
 
