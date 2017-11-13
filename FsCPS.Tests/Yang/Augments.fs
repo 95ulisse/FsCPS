@@ -127,9 +127,9 @@ module Augments =
         let c = (!libRef).DataNodes.[0] :?> YANGContainer
         Assert.Equal(2, c.DataNodes.Count)
         Assert.Equal("l1", c.DataNodes.[0].Name.Name)
-        Assert.Equal("http://example.com/my-lib", c.DataNodes.[0].Name.Namespace.Uri.AbsolutePath)
+        Assert.Equal("http://example.com/my-lib", c.DataNodes.[0].Name.Namespace.Uri.AbsoluteUri)
         Assert.Equal("l2", c.DataNodes.[1].Name.Name)
-        Assert.Equal("http://example.com/my-module", c.DataNodes.[1].Name.Namespace.Uri.AbsolutePath)
+        Assert.Equal("http://example.com/my-module", c.DataNodes.[1].Name.Namespace.Uri.AbsoluteUri)
 
     [<Fact>]
     let ``Augments cannot add duplicate nodes`` () =
@@ -194,6 +194,6 @@ module Augments =
         let c = (!libRef).DataNodes.[0] :?> YANGContainer
         Assert.Equal(2, c.DataNodes.Count)
         Assert.Equal("existing-name", c.DataNodes.[0].Name.Name)
-        Assert.Equal("http://example.com/my-lib", c.DataNodes.[0].Name.Namespace.Uri.AbsolutePath)
+        Assert.Equal("http://example.com/my-lib", c.DataNodes.[0].Name.Namespace.Uri.AbsoluteUri)
         Assert.Equal("existing-name", c.DataNodes.[1].Name.Name)
-        Assert.Equal("http://example.com/my-module", c.DataNodes.[1].Name.Namespace.Uri.AbsolutePath)
+        Assert.Equal("http://example.com/my-module", c.DataNodes.[1].Name.Namespace.Uri.AbsoluteUri)

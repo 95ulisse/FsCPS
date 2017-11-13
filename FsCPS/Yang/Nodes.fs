@@ -1444,19 +1444,27 @@ and YANGAugmentation internal (nodePath: NodePath, scope: Scope) as this =
     /// Applies the augmentation to the target node
     member internal this.Apply(baseNode: IYANGNavigableNode option) =
         
-        // If no base node is provided, an absolute path is required
+        // Select the base node:
+        // if we have been called with an explicit base node, use that one,
+        // otherwise look at the first segment of the path and use the module it refers to as base.
         (
-            match baseNode with
-            | None ->
-                if nodePath.IsAbsolute then
-                    Ok (scope.Module :> IYANGNavigableNode)
-                else
-                    Error [ AbsoluteNodePathRequired(this.OriginalStatement.Value) ]
-            | Some b ->
-                if nodePath.IsAbsolute then
-                    Error [ RelativeNodePathRequired(this.OriginalStatement.Value) ]
-                else
-                    Ok b
+            match baseNode, nodePath.IsAbsolute, nodePath.Segments with
+            
+            // Explicit base: use that one and be sure that the path is relative
+            | Some b, false, _ ->
+                Ok b
+            | Some _, true, _ ->
+                Error [ RelativeNodePathRequired(this.OriginalStatement.Value) ]
+
+            // No explicit base: absolute path is required
+            | None, false, _ ->
+                Error [ AbsoluteNodePathRequired(this.OriginalStatement.Value) ]
+            | None, true, [] ->
+                Error [ AbsoluteNodePathRequired(this.OriginalStatement.Value) ]
+            
+            // Unprefixed absolute path: use the current module as base
+            | None, true, (p, _) :: _ ->
+                resolvePrefix p |>> (fun ns -> ns.Module :> IYANGNavigableNode)
         )
 
         // Navigate each single node to find the target
