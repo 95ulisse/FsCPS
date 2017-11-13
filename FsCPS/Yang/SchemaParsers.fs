@@ -216,6 +216,11 @@ ptypeRef :=
                 Ok()
             );
 
+            property "base" entityRef Optional (fun node (_, prefix, name, scope) _ ->
+                node.SetProperty(YANGTypeProperties.Identity, YANGIdentityRef(None, prefix, name, scope))
+                Ok()
+            )
+
             child penum Many (fun node enumValue _ ->
                 match node.GetProperty(YANGTypeProperties.EnumValues) with
                 | Some l -> l.Add(enumValue)
@@ -258,6 +263,22 @@ let ptypedef : StatementSpec<YANGType> =
         ctx.Scope.RegisterType(t)
         |> Result.map (fun _ -> t)
     )
+
+let pidentity : StatementSpec<YANGIdentity> =
+    createSpec
+        "identity"
+        YANGIdentity
+        identifier
+        (anyOf [
+            property "base" entityRef Optional (fun node (_, prefix, name, scope) _ ->
+                node.Base <- YANGIdentityRef(None, prefix, name, scope) |> Some
+                Ok()
+            )
+
+            prop               any    Optional <@ fun x -> x.Description @>;
+            prop               any    Optional <@ fun x -> x.Reference @>;
+            prop               status Optional <@ fun x -> x.Status @>;
+        ])
 
 
 // Parsers for all the data nodes.
@@ -528,6 +549,9 @@ let pmodule : StatementSpec<YANGModule> =
 
             // Body statements
             [
+                // Identities
+                child pidentity Many (fun x id _ -> x.ExportedIdentities.Add(id.Name, id); Ok());
+
                 // Typedefs
                 child ptypedef Many (fun x t _ -> x.ExportedTypes.Add(t.Name, t); Ok());
 

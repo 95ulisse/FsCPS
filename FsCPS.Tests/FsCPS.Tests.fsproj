@@ -76,6 +76,7 @@
     <Compile Include="Yang\Imports.fs" />
     <Compile Include="Yang\Groupings.fs" />
     <Compile Include="Yang\Augments.fs" />
+    <Compile Include="Yang\Identities.fs" />
     <Compile Include="TypeProviders\YANGProviderRuntime.fs" />
   </ItemGroup>
   <ItemGroup>

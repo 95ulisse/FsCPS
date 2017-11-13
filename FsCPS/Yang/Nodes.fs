@@ -166,6 +166,12 @@ and internal Scope =
     }
     with
 
+        /// Returns the identity with the given name.
+        member this.GetIdentity(name: YANGName) =
+            match (this.Module.ExportedIdentities :> Dictionary<_, _>).TryGetValue(name) with
+            | (true, id) -> Some id
+            | _ -> None
+
         /// Returns the type with the given name.
         member this.GetType(name: YANGName) =
             let rec f scope =
@@ -193,6 +199,16 @@ and internal Scope =
                 | _, None -> None
             f this
 
+        /// Registers a new identity in the current scope.
+        /// Returns an error if the new identity would shadow an already defined one.
+        member this.RegisterIdentity(id: YANGIdentity) =
+            match this.GetIdentity(id.Name) with
+            | Some(shadowedIdentity) ->
+                Error([ ShadowedIdentity(id.OriginalStatement.Value, shadowedIdentity) ])
+            | None ->
+                (this.Module.ExportedIdentities :> Dictionary<_, _>).Add(id.Name, id)
+                Ok()
+
         /// Registers a new type in the current scope.
         /// Returns an error if the new type would shadow an already defined one.
         member this.RegisterType(t: YANGType) =
@@ -215,6 +231,28 @@ and internal Scope =
             | None ->
                 this.Groupings.Add(g.Name, g)
                 Ok()
+
+        /// Resolves a reference to an identity.
+        member this.ResolveIdentityRef(prefix: string option, name: string) =
+            match prefix with
+        
+            // We can either have an unprefixed reference, or a prefixed reference that is using
+            // the same prefix of the module we are parsing. In both cases, resolve from the current scope.
+            | None ->
+                this.GetIdentity({ Namespace = this.Module.Namespace; Name = name })
+            | Some p when p = this.Module.Prefix ->
+                this.GetIdentity({ Namespace = this.Module.Namespace; Name = name })
+
+            // We have a prefixed reference, so resolve the module associated to the prefix,
+            // then search between it's exported identities
+            | Some p ->
+                match this.GetIncludedModule(p) with
+                | Some m ->
+                    let fullName = { Namespace = m.Namespace; Name = name }
+                    match (m.ExportedIdentities :> Dictionary<_,_>).TryGetValue(fullName) with
+                    | (true, id) -> Some(id)
+                    | _ -> None
+                | None -> None
 
         /// Resolves a reference to a type.
         member this.ResolveTypeRef(prefix: string option, name: string) =
@@ -452,6 +490,10 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
     | DuplicateEnumName of YANGEnumValue
     | DuplicateEnumValue of YANGEnumValue
 
+    // Identities
+    | UnresolvedIdentityRef of Statement * string
+    | ShadowedIdentity of Statement * YANGIdentity
+
     // Groupings
     | UnresolvedGroupingRef of Statement * string
     | ShadowedGrouping of Statement * YANGGrouping
@@ -538,6 +580,13 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
                     x.OriginalStatement, (sprintf "The enum name \"%s\" has already been used." x.Name)
                 | DuplicateEnumValue(x) ->
                     x.OriginalStatement, (sprintf "The enum value \"%d\" has already been used." x.Value.Value)
+                | UnresolvedIdentityRef(x, y) ->
+                    Some x, (sprintf "Cannot find identity %s." y)
+                | ShadowedIdentity(x, y) ->
+                    let stmt: Statement option = y.OriginalStatement
+                    match stmt with
+                    | Some(s) -> Some x, (sprintf "This identity shadows the identity %A defined at %A." y.Name s.Position)
+                    | None -> Some x, "This identity shadows a identity defined in an higher scope."
                 | UnresolvedGroupingRef(x, y) ->
                     Some x, (sprintf "Cannot find grouping %s." y)
                 | ShadowedGrouping(x, y) ->
@@ -666,6 +715,7 @@ and [<AbstractClass; Sealed>] YANGTypeProperties private () =
     static member val FractionDigits = YANGTypeProperty<int>("fraction-digits")
     static member val EnumValues = YANGTypeProperty<IList<YANGEnumValue>>("enum-values")
     static member val UnionMembers = YANGTypeProperty<IList<YANGTypeRef>>("union-members")
+    static member val Identity = YANGTypeProperty<YANGIdentityRef>("identity")
 
 
 /// One possible value for a YANG enum type.
@@ -1274,6 +1324,25 @@ and YANGPrimitiveTypes private () =
 
     }
 
+    static member val IdentityRef = {
+        new YANGType({ Namespace = YANGNamespace.Default; Name = "identityref" }) with
+
+            override this.ParseCore(actualType, str) =
+                raise (NotImplementedException())
+
+            override this.SerializeCore(actualType, str) =
+                raise (NotImplementedException())
+
+            override this.CanBeRestrictedWith _ =
+                false
+
+            override this.CheckRequiredPropertiesCore(actualType) =
+                match actualType.GetProperty(YANGTypeProperties.Identity) with
+                | Some _ -> Ok ()
+                | None -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "base") ])
+
+    }
+
     static member FromName(name: string) =
         match name with
         | "empty" -> Some(YANGPrimitiveTypes.Empty)
@@ -1291,6 +1360,7 @@ and YANGPrimitiveTypes private () =
         | "decimal64" -> Some(YANGPrimitiveTypes.Decimal64)
         | "enumeration" -> Some(YANGPrimitiveTypes.Enumeration)
         | "union" -> Some(YANGPrimitiveTypes.Union)
+        | "identityref" -> Some(YANGPrimitiveTypes.IdentityRef)
         | _ -> None
 
 
@@ -1505,6 +1575,50 @@ and YANGAugmentation internal (nodePath: NodePath, scope: Scope) as this =
         )
 
 
+
+
+// -------------------------------------------------------------------
+// Identities
+// -------------------------------------------------------------------
+
+and YANGIdentity(name: YANGName) =
+    inherit YANGNode()
+
+    member val Name = name
+    member val Base: YANGIdentityRef option = None with get, set
+    member val Description: string = null with get, set
+    member val Reference: string = null with get, set
+    member val Status = YANGStatus.Current with get, set
+
+    override this.EnsureRefs() =
+        this.Base
+        |> Option.map (fun ref -> ref.EnsureRefs())
+        |> Option.defaultValue (Ok ())
+
+
+and YANGIdentityRef internal (resolvedIdentity: YANGIdentity option, prefix: string option, name: string, scope: Scope) =
+    inherit YANGNode()
+
+    let resolved = lazy (
+        match resolvedIdentity with
+        | Some _ -> resolvedIdentity
+        | None -> scope.ResolveIdentityRef(prefix, name)
+    )
+
+    member __.ResolvedIdentity
+        with get() =
+            match resolved.Value with
+            | Some id -> id
+            | None -> invalidOp "Invalid identity reference."
+    
+    override this.EnsureRefs() =
+        match resolved.Value with
+        | None -> Error [ UnresolvedIdentityRef(this.OriginalStatement.Value, name) ]
+        | Some id -> id.EnsureRefs()
+
+
+
+
 // -------------------------------------------------------------------
 // Implementation of all the supported data nodes
 // -------------------------------------------------------------------
@@ -1537,6 +1651,7 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
 
     member val DataNodes = ResizeArray<YANGDataNode>()
 
+    member val ExportedIdentities = Dictionary<YANGName, YANGIdentity>()
     member val ExportedTypes = Dictionary<YANGName, YANGType>()
     member val ExportedGroupings = Dictionary<YANGName, YANGGrouping>()
 
@@ -1548,6 +1663,7 @@ and [<AllowNullLiteral>] YANGModule(unqualifiedName: string) =
         >>= (fun _ ->
             this.DataNodes
             |> Seq.cast<YANGNode>
+            |> Seq.append (this.ExportedIdentities.Values |> Seq.cast<YANGNode>)
             |> Seq.append (this.ExportedTypes.Values |> Seq.cast<YANGNode>)
             |> Seq.append (this.ExportedGroupings.Values |> Seq.cast<YANGNode>)
             |> Seq.append (this.Augmentations |> Seq.cast<YANGNode>)

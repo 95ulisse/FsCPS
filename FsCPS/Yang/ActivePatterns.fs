@@ -94,3 +94,8 @@ let (|Union|_|) (t: YANGType) =
     match t.PrimitiveType with
     | x when x = YANGPrimitiveTypes.Union -> Some (allValues t YANGTypeProperties.UnionMembers)
     | _ -> None
+
+let (|IdentityRef|_|) (t: YANGType) =
+    match t.PrimitiveType with
+    | x when x = YANGPrimitiveTypes.IdentityRef -> t.GetProperty(YANGTypeProperties.Identity)
+    | _ -> None
