@@ -193,7 +193,7 @@ let penum : StatementSpec<YANGEnumValue> =
     createSpec
         "enum"
         YANGEnumValue
-        unqualifiedIdentifier
+        any
         (anyOf [
             prop any                                          Optional <@ fun x -> x.Description @>;
             prop any                                          Optional <@ fun x -> x.Reference @>;
