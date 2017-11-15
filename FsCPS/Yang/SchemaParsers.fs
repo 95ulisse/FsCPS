@@ -219,7 +219,12 @@ ptypeRef :=
             property "base" entityRef Optional (fun node (_, prefix, name, scope) _ ->
                 node.SetProperty(YANGTypeProperties.Identity, YANGIdentityRef(None, prefix, name, scope))
                 Ok()
-            )
+            );
+
+            property "path" any Optional (fun node path _ ->
+                node.SetProperty(YANGTypeProperties.Path, path)
+                Ok()
+            );
 
             child penum Many (fun node enumValue _ ->
                 match node.GetProperty(YANGTypeProperties.EnumValues) with

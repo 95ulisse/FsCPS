@@ -99,3 +99,8 @@ let (|IdentityRef|_|) (t: YANGType) =
     match t.PrimitiveType with
     | x when x = YANGPrimitiveTypes.IdentityRef -> t.GetProperty(YANGTypeProperties.Identity)
     | _ -> None
+
+let (|LeafRef|_|) (t: YANGType) =
+    match t.PrimitiveType with
+    | x when x = YANGPrimitiveTypes.LeafRef -> t.GetProperty(YANGTypeProperties.Path)
+    | _ -> None

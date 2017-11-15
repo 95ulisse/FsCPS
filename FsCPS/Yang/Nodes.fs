@@ -716,6 +716,7 @@ and [<AbstractClass; Sealed>] YANGTypeProperties private () =
     static member val EnumValues = YANGTypeProperty<IList<YANGEnumValue>>("enum-values")
     static member val UnionMembers = YANGTypeProperty<IList<YANGTypeRef>>("union-members")
     static member val Identity = YANGTypeProperty<YANGIdentityRef>("identity")
+    static member val Path = YANGTypeProperty<String>("path")
 
 
 /// One possible value for a YANG enum type.
@@ -1343,6 +1344,25 @@ and YANGPrimitiveTypes private () =
 
     }
 
+    static member val LeafRef = {
+        new YANGType({ Namespace = YANGNamespace.Default; Name = "leafref" }) with
+
+        override this.ParseCore(actualType, str) =
+                raise (NotImplementedException())
+
+            override this.SerializeCore(actualType, str) =
+                raise (NotImplementedException())
+
+            override this.CanBeRestrictedWith _ =
+                false
+
+            override this.CheckRequiredPropertiesCore(actualType) =
+                match actualType.GetProperty(YANGTypeProperties.Path) with
+                | Some _ -> Ok ()
+                | None -> Error([ MissingRequiredStatement(actualType.OriginalStatement.Value, "path") ])
+
+    }
+
     static member FromName(name: string) =
         match name with
         | "empty" -> Some(YANGPrimitiveTypes.Empty)
@@ -1361,6 +1381,7 @@ and YANGPrimitiveTypes private () =
         | "enumeration" -> Some(YANGPrimitiveTypes.Enumeration)
         | "union" -> Some(YANGPrimitiveTypes.Union)
         | "identityref" -> Some(YANGPrimitiveTypes.IdentityRef)
+        | "leafref" -> Some(YANGPrimitiveTypes.LeafRef)
         | _ -> None
 
 
