@@ -601,7 +601,7 @@ and [<StructuredFormatDisplay("{Text}")>] SchemaError =
                 | AbsoluteNodePathRequired(x) ->
                     Some x, "Absolute node path required."
                 | CannotResolvePath(x, y) ->
-                    Some x, (sprintf "Cannot resolve module path. Unable to find node %s." y)
+                    Some x, (sprintf "Cannot resolve node path. Unable to find node %s." y)
             
             match stmt with
             | Some(s) -> sprintf "Statement \"%s\" (%A): %s" s.Name s.Position msg
@@ -1562,7 +1562,7 @@ and YANGAugmentation internal (nodePath: NodePath, scope: Scope) as this =
         >>= (fun baseNode ->
             nodePath.Segments
             |> Result.foldSequence (fun (node: IYANGNavigableNode) (prefix, name) ->
-                
+
                 // Resolve the prefix, select the child, then continue
                 resolvePrefix prefix
                 >>= (fun ns ->

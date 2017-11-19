@@ -72,6 +72,7 @@
     <Compile Include="Events.fs" />
     <Compile Include="Server.fs" />
     <Compile Include="Yang\StatementParsers.fs" />
+    <Compile Include="Yang\UnknownStatements.fs" />
     <Compile Include="Yang\Types.fs" />
     <Compile Include="Yang\Imports.fs" />
     <Compile Include="Yang\Groupings.fs" />

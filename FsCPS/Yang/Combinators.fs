@@ -230,6 +230,13 @@ let anyOf (childrenDesc: StatementSpec<'a> list) : SchemaParser<'a> =
 /// Makes also sure that the cardinalities of the statements are respected.
 let unorderedGroups (childrenSpec: StatementSpec<'a> list list) : SchemaParser<'a> =
     
+    // Helper function used to see if a statement is completely unknown
+    // or if it belongs to another group of statements
+    let isUnknownStatement =
+        let names = childrenSpec |> List.collect (List.map (fun x -> x.Name))
+        fun x ->
+            not (List.contains x names)
+
     // Transforms the description of the children in a list of maps
     let childrenMaps =
         childrenSpec
@@ -254,7 +261,20 @@ let unorderedGroups (childrenSpec: StatementSpec<'a> list list) : SchemaParser<'
         while (not stop) && i < childrenCollection.Count do
             ctx.Statement <- childrenCollection.[i]
             match Map.tryFind ctx.Statement.Name group with
-            | None -> stop <- true
+            | None ->
+
+                // Stop parsing only if we got a statement of another group.
+                // If we got a completely unknown statement, let the handler decide.
+                if isUnknownStatement ctx.Statement.Name then
+                    match ctx.Options.UnknownStatement ctx.Statement with
+                    | Ok () ->
+                        i <- i + 1 // Consume the statement
+                    | Error l ->
+                        errors <- l
+                        stop <- true
+                else
+                    stop <- true
+
             | Some(childSpec) ->
 
                 // Checks if parsing the child would exceed the cardinality
